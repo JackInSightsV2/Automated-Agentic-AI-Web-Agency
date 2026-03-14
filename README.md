@@ -2,6 +2,8 @@
 
 An autonomous AI-powered web agency that discovers local businesses, builds them professional websites, and handles the entire sales pipeline -- from first contact to payment -- using a team of specialized AI agents.
 
+![Screenshot](public/screenshot.jpeg)
+
 ## What It Does
 
 This system runs an entire web agency autonomously:
