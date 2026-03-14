@@ -2,7 +2,7 @@ import { supabase } from './supabase'
 import { agentLog } from './logger'
 import { notify } from './telegram'
 import { checkPaidSessions } from './stripe'
-import { runDeliveryAgent } from '../agents/delivery'
+import { runDeliveryPipeline } from '../agents/delivery'
 import { dequeue, completeItem, failItem, isQueueActive, isWithinBusinessHours, getConcurrency, getProcessingCount } from './queue'
 import { handleVerify, handleCopywrite, handleBuild, handleSeo, handleReview, handleDeploy, handleCall, handleFollowup, handleClose } from './queue-handlers'
 import { runMonitorAgent } from '../agents/monitor'
@@ -44,9 +44,9 @@ async function checkPayments() {
         `Starting delivery process...`
       )
 
-      // Trigger the delivery agent
-      runDeliveryAgent(lead.id).catch(async (err) => {
-        await agentLog('cron', `Delivery failed for ${lead.name}: ${String(err)}`, {
+      // Trigger the delivery pipeline: apply changes → SEO → review → deploy
+      runDeliveryPipeline(lead.id).catch(async (err) => {
+        await agentLog('cron', `Delivery pipeline failed for ${lead.name}: ${String(err)}`, {
           leadId: lead.id,
           level: 'error'
         })

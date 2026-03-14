@@ -13,6 +13,25 @@ interface CompaniesHouseResponse {
   items?: CompaniesHouseResult[]
 }
 
+interface FilingHistoryResponse {
+  items?: Array<{
+    date: string
+    description: string
+    type: string
+  }>
+}
+
+interface HMRCVatResponse {
+  target?: {
+    name: string
+    vatNumber: string
+    address?: {
+      line1?: string
+      postcode?: string
+    }
+  }
+}
+
 export async function runVerifierAgent(leadId: string): Promise<boolean> {
   const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single()
   if (!lead) throw new Error(`Lead ${leadId} not found`)
@@ -79,7 +98,81 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
     notes.push('+15 no Companies House API key configured')
   }
 
-  // 2. Google rating scoring
+  // 2. HMRC Filing History Check (via Companies House filing-history endpoint)
+  //    Checks if the company is actively filing confirmation statements and accounts,
+  //    which indicates HMRC compliance and active business operations.
+  if (chNumber && apiKey) {
+    try {
+      const filingRes = await fetch(
+        `https://api.company-information.service.gov.uk/company/${chNumber}/filing-history?items_per_page=5`,
+        {
+          headers: {
+            Authorization: 'Basic ' + btoa(apiKey + ':'),
+          },
+        }
+      )
+
+      if (filingRes.ok) {
+        const filingData = (await filingRes.json()) as FilingHistoryResponse
+        const filings = filingData.items || []
+
+        if (filings.length > 0) {
+          const latestDate = new Date(filings[0].date)
+          const monthsAgo = (Date.now() - latestDate.getTime()) / (1000 * 60 * 60 * 24 * 30)
+
+          if (monthsAgo <= 15) {
+            score += 15
+            notes.push(`+15 HMRC compliance: last filing ${filings[0].date} (${filings[0].description})`)
+          } else {
+            score -= 10
+            notes.push(`-10 HMRC compliance: last filing ${filings[0].date} (${Math.round(monthsAgo)} months ago — possibly dormant)`)
+          }
+        } else {
+          notes.push('HMRC compliance: no filing history found')
+        }
+      } else {
+        notes.push(`Filing history API error: ${filingRes.status}`)
+      }
+    } catch (err) {
+      notes.push(`HMRC filing history check failed: ${String(err)}`)
+    }
+  }
+
+  // 3. HMRC VAT Registration Check
+  //    Validates whether the business is VAT registered (turnover > £85k threshold).
+  //    Uses HMRC's public VAT check API — requires a VAT Registration Number (VRN).
+  const hmrcVatCheck = process.env.HMRC_VAT_CHECK !== 'false'
+  if (hmrcVatCheck && chNumber) {
+    try {
+      // UK VAT numbers for limited companies can sometimes be found by trying
+      // the company number as a VRN (not always reliable, but worth checking)
+      const potentialVrn = chNumber.replace(/^0+/, '').padStart(9, '0')
+
+      const vatRes = await fetch(
+        `https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup/${potentialVrn}`,
+        {
+          headers: { Accept: 'application/json' },
+        }
+      )
+
+      if (vatRes.ok) {
+        const vatData = (await vatRes.json()) as HMRCVatResponse
+        if (vatData.target) {
+          score += 15
+          notes.push(`+15 HMRC VAT registered: ${vatData.target.name} (VRN: ${vatData.target.vatNumber})`)
+        }
+      } else if (vatRes.status === 404) {
+        // Not VAT registered — neutral for small businesses
+        notes.push('HMRC VAT: not registered (normal for businesses under £85k turnover)')
+      } else {
+        notes.push(`HMRC VAT API error: ${vatRes.status}`)
+      }
+    } catch (err) {
+      notes.push(`HMRC VAT check failed: ${String(err)}`)
+    }
+  }
+
+  // 4. Google rating scoring
   if (lead.google_rating !== null) {
     if (lead.google_rating >= 4.0) {
       score += 20
@@ -90,7 +183,7 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
     }
   }
 
-  // 3. Google review count scoring
+  // 5. Google review count scoring
   if (lead.google_review_count !== null) {
     if (lead.google_review_count >= 50) {
       score += 20
@@ -101,7 +194,7 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
     }
   }
 
-  // 4. Has phone
+  // 6. Has phone
   if (lead.phone) {
     score += 10
     notes.push('+10 has phone')

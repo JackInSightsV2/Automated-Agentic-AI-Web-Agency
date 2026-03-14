@@ -231,7 +231,7 @@ bot.onText(/\/stats/, async (msg) => {
 
   const counts: Record<string, number> = {}
 
-  for (const status of ['discovered', 'verified', 'built', 'deployed', 'emailed', 'called', 'clicked', 'booked', 'hitl_ready', 'closed', 'paid', 'rejected']) {
+  for (const status of ['discovered', 'verified', 'built', 'deployed', 'emailed', 'called', 'clicked', 'booked', 'hitl_ready', 'closed', 'paid', 'delivered', 'rejected']) {
     const { count } = await supabase
       .from('leads')
       .select('*', { count: 'exact', head: true })
@@ -252,6 +252,7 @@ bot.onText(/\/stats/, async (msg) => {
     `🔔 HITL Ready: ${counts.hitl_ready}\n` +
     `💰 Closed: ${counts.closed}\n` +
     `💳 Paid: ${counts.paid}\n` +
+    `📦 Delivered: ${counts.delivered}\n` +
     `❌ Rejected: ${counts.rejected}`,
     { parse_mode: 'Markdown' }
   )
@@ -315,14 +316,38 @@ bot.on('callback_query', async (query) => {
   if (action === 'sendsite') {
     const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single()
     if (lead) {
-      await bot.sendMessage(ADMIN_ID,
-        `📲 *Site link for ${lead.name}:*\n\n` +
-        `${lead.vercel_deployment_url}\n\n` +
-        `_Copy and send to ${lead.phone} via WhatsApp/SMS_`,
-        { parse_mode: 'Markdown' }
-      )
+      if (lead.phone) {
+        try {
+          const { sendClientMessage } = await import('./twilio')
+          const contactName = lead.contact_name || lead.name.split(' ')[0]
+          await sendClientMessage({
+            phone: lead.phone,
+            leadId: lead.id,
+            message:
+              `Hi ${contactName}! This is ${process.env.AGENCY_CALLER_NAME || 'Alex'} from ${process.env.AGENCY_NAME || 'Web Agency'}.\n\n` +
+              `Here's the website we built for ${lead.name}:\n\n` +
+              `${lead.vercel_deployment_url}\n\n` +
+              `Have a look and let us know what you think!`,
+          })
+          await bot.sendMessage(ADMIN_ID,
+            `✅ Site link sent to ${lead.name} (${lead.phone}) via SMS/WhatsApp`,
+            { parse_mode: 'Markdown' }
+          )
+        } catch (err) {
+          await bot.sendMessage(ADMIN_ID,
+            `❌ Failed to send via Twilio: ${String(err)}\n\n` +
+            `Manual fallback — site link for ${lead.name}:\n${lead.vercel_deployment_url}`,
+            { parse_mode: 'Markdown' }
+          )
+        }
+      } else {
+        await bot.sendMessage(ADMIN_ID,
+          `⚠️ No phone number for ${lead.name}.\nSite: ${lead.vercel_deployment_url}`,
+          { parse_mode: 'Markdown' }
+        )
+      }
     }
-    await bot.answerCallbackQuery(query.id, { text: '✅ Link shown above' })
+    await bot.answerCallbackQuery(query.id, { text: '✅ Sent' })
   }
 
   if (action === 'book') {

@@ -22,6 +22,7 @@ export type LeadStatus =
   | 'spec_sent'
   | 'paid'
   | 'delivering'
+  | 'delivered'
   | 'hitl_ready'
   | 'closed'
   | 'rejected'

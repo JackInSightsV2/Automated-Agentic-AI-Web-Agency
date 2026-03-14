@@ -2,6 +2,7 @@ import { supabase } from './supabase'
 import { agentLog } from './logger'
 import { enqueue } from './queue'
 import { notify } from './telegram'
+import { sendClientMessage } from './twilio'
 import type { QueueItem } from '../types'
 import { runVerifierAgent } from '../agents/verifier'
 import { runCopywriterAgent } from '../agents/copywriter'
@@ -29,7 +30,7 @@ function assertStatus(lead: any, expected: string[], stage: string) {
 export async function handleVerify(item: QueueItem): Promise<void> {
   const lead = await getLead(item.lead_id)
   assertStatus(lead, ['discovered'], 'Verify')
-  await agentLog('verifier', `Verifying "${lead.name}" — checking Companies House + viability score`, { leadId: item.lead_id })
+  await agentLog('verifier', `Verifying "${lead.name}" — checking Companies House, HMRC + viability score`, { leadId: item.lead_id })
 
   const viable = await runVerifierAgent(item.lead_id)
 
@@ -84,17 +85,82 @@ export async function handleDeploy(item: QueueItem): Promise<void> {
 
   await runDeployerAgent(item.lead_id)
 
-  // Check if lead has email — send email if so
-  const { data: updatedLead } = await supabase.from('leads').select('email, vercel_deployment_url').eq('id', item.lead_id).single()
+  // Fetch updated deployment URL
+  const { data: updatedLead } = await supabase.from('leads').select('*').eq('id', item.lead_id).single()
+
+  // Verify deployment actually happened before continuing
+  if (!updatedLead?.vercel_deployment_url) {
+    throw new Error(`Deploy handler: "${lead.name}" has no deployment URL after deploy. Not continuing.`)
+  }
+
+  // Check if this is a delivery (post-payment) deployment
+  if (updatedLead.paid_at) {
+    const contactName = updatedLead.contact_name || updatedLead.name.split(' ')[0]
+
+    // Send client a message via Twilio that the site is ready
+    if (updatedLead.phone) {
+      try {
+        await sendClientMessage({
+          phone: updatedLead.phone,
+          leadId: item.lead_id,
+          message:
+            `Hey ${contactName}! Great news — we've made the changes you asked for and your website is ready for review.\n\n` +
+            `Have a look: ${updatedLead.vercel_deployment_url}\n\n` +
+            `This is your chance to check everything over before we connect it to your domain. If there's anything you'd like tweaked, just let us know!\n\n` +
+            `Once you're happy, we'll get it live on your own domain.\n\n` +
+            `— ${process.env.AGENCY_CALLER_NAME || 'Alex'}, ${process.env.AGENCY_NAME || 'Web Agency'}`,
+        })
+      } catch (err) {
+        await agentLog('deployer', `Failed to send delivery message to client via Twilio: ${String(err)}`, {
+          leadId: item.lead_id,
+          level: 'warn',
+        })
+      }
+    }
+
+    // Notify admin about domain work via Telegram
+    const domainInfo = []
+    if (updatedLead.desired_domain) {
+      domainInfo.push(`Client wants domain: *${updatedLead.desired_domain}*`)
+    }
+    if (updatedLead.needs_domain) {
+      domainInfo.push(`Client needs us to register a domain for them`)
+      if (!updatedLead.desired_domain) {
+        const suggestedDomain = updatedLead.name.toLowerCase().replace(/[^a-z0-9]/g, '') + '.co.uk'
+        domainInfo.push(`Suggested: ${suggestedDomain}`)
+      }
+    }
+    if (updatedLead.needs_email_setup) {
+      domainInfo.push(`Needs professional email setup`)
+    }
+
+    await notify(
+      `*Site delivered: ${updatedLead.name}*\n\n` +
+      `Live at: ${updatedLead.vercel_deployment_url}\n` +
+      `Client notified via SMS/WhatsApp.\n\n` +
+      (domainInfo.length > 0
+        ? `*Domain work needed:*\n${domainInfo.map(d => `• ${d}`).join('\n')}\n\n` +
+          `_Action required: purchase/configure domain and DNS._`
+        : `_No domain work needed — client has their own domain._`)
+    )
+
+    await supabase.from('leads').update({
+      status: 'delivered',
+      status_updated_at: new Date().toISOString()
+    }).eq('id', item.lead_id)
+
+    await agentLog('deployer', `Delivery complete for "${updatedLead.name}" — client notified, admin alerted about domain work`, {
+      leadId: item.lead_id,
+      level: 'success',
+    })
+    return
+  }
+
+  // Standard (non-delivery) deploy: send email if available, queue call
   if (updatedLead?.email) {
     await agentLog('deployer', `"${lead.name}" has email — sending outreach`, { leadId: item.lead_id })
     const { runEmailerAgent } = await import('../agents/emailer')
     await runEmailerAgent(item.lead_id)
-  }
-
-  // Verify deployment actually happened before queuing call
-  if (!updatedLead?.vercel_deployment_url) {
-    throw new Error(`Deploy handler: "${lead.name}" has no deployment URL after deploy. Not queuing call.`)
   }
 
   await enqueue({
@@ -128,10 +194,10 @@ export async function handleCall(item: QueueItem): Promise<void> {
   if (calledLead?.vercel_deployment_url) {
     const calendly = process.env.CALENDLY_LINK || ''
     await notify(
-      `📞 Call complete: *${calledLead.name}*\n` +
+      `Call complete: *${calledLead.name}*\n` +
       `Outcome: ${calledLead.call_outcome || 'unknown'}\n\n` +
-      `🌐 ${calledLead.vercel_deployment_url}\n` +
-      `📅 ${calendly}`
+      `${calledLead.vercel_deployment_url}\n` +
+      `${calendly}`
     )
   }
 
@@ -205,7 +271,7 @@ export async function handleReview(item: QueueItem): Promise<void> {
       }).eq('id', item.lead_id)
 
       await notify(
-        `⚠️ *Review escalation: ${lead.name}*\n` +
+        `*Review escalation: ${lead.name}*\n` +
         `Failed ${currentAttempts} review attempts.\n` +
         `Error: ${lead.error || 'See review logs'}\n\n` +
         `_Needs manual intervention_`
@@ -215,17 +281,35 @@ export async function handleReview(item: QueueItem): Promise<void> {
         level: 'error'
       })
     } else {
-      // Re-queue to build for another attempt
-      await enqueue({
-        leadId: item.lead_id,
-        queueName: 'build',
-        pipelineRunId: item.pipeline_run_id || undefined,
-        metadata: { review_attempt: currentAttempts, review_errors: lead.error }
-      })
-      await agentLog('reviewer', `"${lead.name}" failed review (attempt ${currentAttempts}/3) → re-queued for build`, {
-        leadId: item.lead_id,
-        level: 'warn'
-      })
+      // For delivery builds that fail review, re-queue to seo (changes already applied)
+      // For new builds, re-queue to build
+      if (lead.paid_at) {
+        await supabase.from('leads').update({
+          status: 'built',
+          status_updated_at: new Date().toISOString()
+        }).eq('id', item.lead_id)
+
+        await enqueue({
+          leadId: item.lead_id,
+          queueName: 'seo',
+          metadata: { review_attempt: currentAttempts, review_errors: lead.error }
+        })
+        await agentLog('reviewer', `"${lead.name}" delivery failed review (attempt ${currentAttempts}/3) → re-queued for SEO`, {
+          leadId: item.lead_id,
+          level: 'warn'
+        })
+      } else {
+        await enqueue({
+          leadId: item.lead_id,
+          queueName: 'build',
+          pipelineRunId: item.pipeline_run_id || undefined,
+          metadata: { review_attempt: currentAttempts, review_errors: lead.error }
+        })
+        await agentLog('reviewer', `"${lead.name}" failed review (attempt ${currentAttempts}/3) → re-queued for build`, {
+          leadId: item.lead_id,
+          level: 'warn'
+        })
+      }
     }
   }
 }
@@ -238,22 +322,38 @@ export async function handleFollowup(item: QueueItem): Promise<void> {
   const calendly = process.env.CALENDLY_LINK || ''
   const contactName = lead.contact_name || lead.name.split(/\s|&/)[0]
 
-  // 1. Send follow-up text via Telegram (SMS/WhatsApp in production)
-  await notify(
-    `Hi ${contactName}! 👋\n\n` +
+  // 1. Send follow-up text to client via Twilio SMS/WhatsApp
+  const followupMessage =
+    `Hi ${contactName}!\n\n` +
     `It was great chatting just now. As promised, here's the website we built for ${lead.name}:\n\n` +
-    `🌐 ${lead.vercel_deployment_url}\n\n` +
+    `${lead.vercel_deployment_url}\n\n` +
     `Have a browse — it's fully live and working right now. If you like what you see and want to make it yours, book a quick 10-minute call with ${process.env.AGENCY_OWNER_NAME || 'the owner'} of ${process.env.AGENCY_NAME || 'Web Agency'}, and he'll walk you through the whole process:\n\n` +
-    `📅 ${calendly}\n\n` +
+    `${calendly}\n\n` +
     `No pressure at all — the site is yours to look at either way!\n\n` +
     `Cheers,\n${process.env.AGENCY_CALLER_NAME || 'Alex'} from ${process.env.AGENCY_NAME || 'Web Agency'}`
+
+  if (lead.phone) {
+    try {
+      await sendClientMessage({ phone: lead.phone, message: followupMessage, leadId: item.lead_id })
+    } catch (err) {
+      await agentLog('followup', `Twilio follow-up failed for "${lead.name}": ${String(err)}`, {
+        leadId: item.lead_id,
+        level: 'warn',
+      })
+    }
+  }
+
+  // 2. Notify admin via Telegram
+  await notify(
+    `Follow-up sent to *${lead.name}* (${contactName}) via SMS/WhatsApp.\n` +
+    `Site: ${lead.vercel_deployment_url}`
   )
 
-  // 2. Make follow-up call via Bland.ai
+  // 3. Make follow-up call via Bland.ai
   const { runFollowupCallAgent } = await import('../agents/followup-caller')
   await runFollowupCallAgent(item.lead_id)
 
-  await agentLog('followup', `Follow-up complete for "${lead.name}" — Telegram message + Bland.ai call`, {
+  await agentLog('followup', `Follow-up complete for "${lead.name}" — Twilio message + Bland.ai call`, {
     leadId: item.lead_id,
     level: 'success',
   })

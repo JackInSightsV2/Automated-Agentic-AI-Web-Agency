@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
+import { sendClientMessage } from '../lib/twilio'
 import { createCheckoutLink } from '../lib/stripe'
 
 export async function runCloserAgent(leadId: string): Promise<void> {
@@ -174,9 +175,28 @@ export async function pollClosingCall(leadId: string): Promise<string | null> {
         await agentLog('closer', `Stripe link failed: ${String(err)}`, { leadId, level: 'warn' })
       }
 
-      // Send friendly summary + payment link via Telegram
+      // Send friendly summary + payment link to client via Twilio SMS/WhatsApp
       const spec = buildJobSpec(lead, details, totalPrice)
-      await notify(spec)
+      if (lead.phone) {
+        try {
+          await sendClientMessage({ phone: lead.phone, message: spec, leadId })
+          await agentLog('closer', `Job spec sent to client via Twilio`, { leadId, level: 'success' })
+        } catch (err) {
+          await agentLog('closer', `Failed to send spec via Twilio: ${String(err)}`, { leadId, level: 'warn' })
+        }
+      }
+
+      // Notify admin via Telegram
+      const contactName = lead.contact_name || lead.name.split(' ')[0]
+      await notify(
+        `*Closing call complete: ${lead.name}*\n\n` +
+        `${contactName} wants to go ahead!\n` +
+        `Total: £${totalPrice}\n` +
+        `Domain: ${details.domain || (details.needsDomain ? 'needs registration' : 'N/A')}\n` +
+        `CTA: ${details.ctaType || 'N/A'} → ${details.ctaValue || 'N/A'}\n` +
+        `Changes: ${details.changes || 'none'}\n\n` +
+        `Job spec + payment link sent to client via SMS/WhatsApp.`
+      )
     } else {
       updateData.status = 'hitl_ready'
     }
