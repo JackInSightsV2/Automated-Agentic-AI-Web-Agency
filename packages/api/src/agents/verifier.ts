@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
+import { fetchWithRetry } from '../lib/fetch-retry'
 
 const VIABILITY_THRESHOLD = parseInt(process.env.VIABILITY_THRESHOLD || '40')
 
@@ -49,7 +50,7 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
   if (apiKey) {
     try {
       const searchName = lead.name.replace(/[^a-zA-Z0-9 ]/g, '').trim()
-      const res = await fetch(
+      const res = await fetchWithRetry(
         `https://api.company-information.service.gov.uk/search/companies?q=${encodeURIComponent(searchName)}&items_per_page=5`,
         {
           headers: {
@@ -103,7 +104,7 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
   //    which indicates HMRC compliance and active business operations.
   if (chNumber && apiKey) {
     try {
-      const filingRes = await fetch(
+      const filingRes = await fetchWithRetry(
         `https://api.company-information.service.gov.uk/company/${chNumber}/filing-history?items_per_page=5`,
         {
           headers: {
@@ -148,7 +149,7 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
       // the company number as a VRN (not always reliable, but worth checking)
       const potentialVrn = chNumber.replace(/^0+/, '').padStart(9, '0')
 
-      const vatRes = await fetch(
+      const vatRes = await fetchWithRetry(
         `https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup/${potentialVrn}`,
         {
           headers: { Accept: 'application/json' },

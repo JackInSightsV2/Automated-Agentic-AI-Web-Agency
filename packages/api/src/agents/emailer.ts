@@ -61,7 +61,7 @@ export async function runEmailerAgent(leadId: string): Promise<void> {
           <li>Ready to go live with your own domain</li>
         </ul>
 
-        <p>If you love it and want to own it, we can set it up with your own domain (like <strong>www.${lead.name.toLowerCase().replace(/\s/g, '')}.co.uk</strong>) for a small one-time fee.</p>
+        <p>If you love it and want to own it, we can set it up with your own domain (like <strong>www.${lead.name.toLowerCase().replace(/\s/g, '')}${process.env.DEFAULT_TLD || '.co.uk'}</strong>) for a small one-time fee.</p>
 
         ${calendlyLink && !calendlyLink.includes('your-link')
           ? `<p>Want to chat? Book a 15-minute call: <a href="${calendlyLink}">${calendlyLink}</a></p>`

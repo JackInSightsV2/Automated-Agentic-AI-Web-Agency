@@ -2,7 +2,9 @@ import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
 import { sendClientMessage } from '../lib/twilio'
+import { fetchWithRetry } from '../lib/fetch-retry'
 import { createCheckoutLink } from '../lib/stripe'
+import { agency, pricing, getCallPhone } from '../lib/config'
 
 export async function runCloserAgent(leadId: string): Promise<void> {
   const { data: lead } = await supabase
@@ -16,17 +18,17 @@ export async function runCloserAgent(leadId: string): Promise<void> {
     return
   }
 
-  // HACKATHON: always call the demo number
-  const phone = process.env.AGENCY_PHONE || lead.phone
-
+  const phone = getCallPhone(lead.phone)
   const contactName = lead.contact_name
   const greeting = contactName
-    ? `"Hi there! Is that ${contactName}? ... Brilliant! It's ${process.env.AGENCY_CALLER_NAME || 'Alex'} here from ${process.env.AGENCY_NAME || 'Web Agency'} — thanks so much for booking a chat with us! How are you doing today?"`
-    : `"Hi there! Am I speaking with someone from ${lead.name}? ... Lovely! And what's your name? ... [REMEMBER THEIR NAME AND USE IT FOR THE REST OF THE CALL] ... Nice to meet you! It's ${process.env.AGENCY_CALLER_NAME || 'Alex'} here from ${process.env.AGENCY_NAME || 'Web Agency'} — thanks so much for booking a chat with us! How are you doing today?"`
+    ? `"Hi there! Is that ${contactName}? ... Brilliant! It's ${agency.callerName} here from ${agency.name} — thanks so much for booking a chat with us! How are you doing today?"`
+    : `"Hi there! Am I speaking with someone from ${lead.name}? ... Lovely! And what's your name? ... [REMEMBER THEIR NAME AND USE IT FOR THE REST OF THE CALL] ... Nice to meet you! It's ${agency.callerName} here from ${agency.name} — thanks so much for booking a chat with us! How are you doing today?"`
 
   await agentLog('closer', `Initiating closing call to: ${lead.name}${contactName ? ` (${contactName})` : ''} (${phone})`, { leadId })
 
-  const task = `You are ${process.env.AGENCY_CALLER_NAME || 'Alex'} from ${process.env.AGENCY_NAME || 'Web Agency'}, a web design studio in London. You're making a follow-up call to ${lead.name}${contactName ? ` — you spoke to ${contactName} last time` : ''} who booked a call after seeing the website you built for them. Be warm, friendly, and professional — like chatting with a neighbour who's interested in your services.
+  const suggestedDomain = lead.name.toLowerCase().replace(/[^a-z0-9]/g, '') + agency.defaultTld
+
+  const task = `You are ${agency.callerName} from ${agency.name}, a web design studio in London. You're making a follow-up call to ${lead.name}${contactName ? ` — you spoke to ${contactName} last time` : ''} who booked a call after seeing the website you built for them. Be warm, friendly, and professional — like chatting with a neighbour who's interested in your services.
 
 IMPORTANT: This is a consultative conversation, not a sales pitch. Take your time. Listen. Let them talk. Ask follow-up questions naturally.${contactName ? ` You already know their name is ${contactName} — use it naturally throughout the call.` : ''}
 
@@ -39,12 +41,12 @@ ${greeting}
 "So, you had a chance to look at the website we put together for you — what did you think? ... [Listen and respond naturally. If they loved it, be enthusiastic. If they have concerns, acknowledge them.]"
 
 3. EXPLAIN THE OFFER (naturally, not scripted):
-"So here's how it works — it's really simple. To get the site live on your own domain, it's just £35 as a one-off setup fee, and then £5 a month which covers hosting and any small changes you need. So if you want to update your phone number, change some text, add a photo — that's all included."
+"So here's how it works — it's really simple. To get the site live on your own domain, it's just £${pricing.setup} as a one-off setup fee, and then £${pricing.monthly} a month which covers hosting and any small changes you need. So if you want to update your phone number, change some text, add a photo — that's all included."
 
 4. DOMAIN NAME — ask this naturally:
-"Now, do you already have a domain name for your business? Like a .co.uk or .com? ...
+"Now, do you already have a domain name for your business? Like a ${agency.defaultTld} or .com? ...
    - If YES: "Perfect, what is it?" [Repeat back to confirm] "Lovely, we'll get the site set up on that."
-   - If NO: "No worries at all! We can sort that out for you. Something like ${lead.name.toLowerCase().replace(/[^a-z0-9]/g, '')}.co.uk might work nicely — or we can come up with a few options. There's an extra £25 for domain registration and setting up a professional email address for you — so you'd get something like hello@yourdomain.co.uk. Would you like us to sort that?"
+   - If NO: "No worries at all! We can sort that out for you. Something like ${suggestedDomain} might work nicely — or we can come up with a few options. There's an extra £${pricing.domain} for domain registration and setting up a professional email address for you — so you'd get something like hello@yourdomain${agency.defaultTld}. Would you like us to sort that?"
 
 5. CTA SETUP — how they want customers to reach them:
 "One quick question — on the website, how would you like people to get in touch with you? Would you prefer:
@@ -64,7 +66,7 @@ Is there anything else you'd like to ask? ...
 Brilliant, thanks so much for your time${contactName ? ` ${contactName}` : ''}! I'll get that summary over to you shortly. Have a great day!"
 
 8. IF VOICEMAIL:
-"Hi there, it's ${process.env.AGENCY_CALLER_NAME || 'Alex'} from ${process.env.AGENCY_NAME || 'Web Agency'}! We had a call booked to chat about the website we built for ${lead.name}. No worries — I'll drop you a message with all the details. If you'd like to rebook, there's a link in there too. Have a lovely day!"
+"Hi there, it's ${agency.callerName} from ${agency.name}! We had a call booked to chat about the website we built for ${lead.name}. No worries — I'll drop you a message with all the details. If you'd like to rebook, there's a link in there too. Have a lovely day!"
 
 INFORMATION YOU MUST COLLECT (ask naturally, don't interrogate):
 - Do they want to go ahead? (yes/no/thinking about it)
@@ -78,8 +80,8 @@ Business context:
 - Business name: ${lead.name}
 - Category: ${lead.category}
 - Website we built: ${lead.vercel_deployment_url}
-- Pricing: £35 setup + £5/month
-- Domain + email setup: extra £25
+- Pricing: £${pricing.setup} setup + £${pricing.monthly}/month
+- Domain + email setup: extra £${pricing.domain}
 - Booking link: ${process.env.CALENDLY_LINK}
 ${lead.google_rating ? `- Their Google rating: ${lead.google_rating}/5 (${lead.google_review_count} reviews)` : ''}
 
@@ -91,10 +93,13 @@ Style notes:
 - Repeat back important details (domain names, phone numbers, emails)
 - Aim for 3-5 minutes`
 
-  const res = await fetch('https://api.bland.ai/v1/calls', {
+  const apiKey = process.env.BLAND_AI_API_KEY
+  if (!apiKey) throw new Error('BLAND_AI_API_KEY must be set')
+
+  const res = await fetchWithRetry('https://api.bland.ai/v1/calls', {
     method: 'POST',
     headers: {
-      Authorization: process.env.BLAND_AI_API_KEY!,
+      Authorization: apiKey,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -136,8 +141,11 @@ export async function pollClosingCall(leadId: string): Promise<string | null> {
 
   if (!lead?.closing_call_id) return null
 
-  const res = await fetch(`https://api.bland.ai/v1/calls/${lead.closing_call_id}`, {
-    headers: { Authorization: process.env.BLAND_AI_API_KEY! }
+  const apiKey = process.env.BLAND_AI_API_KEY
+  if (!apiKey) return null
+
+  const res = await fetchWithRetry(`https://api.bland.ai/v1/calls/${lead.closing_call_id}`, {
+    headers: { Authorization: apiKey }
   })
   const call = await res.json() as {
     status?: string
@@ -148,7 +156,7 @@ export async function pollClosingCall(leadId: string): Promise<string | null> {
   if (call.status === 'completed') {
     const details = extractClosingDetails(call.transcripts || [], call.summary || '')
 
-    const totalPrice = 35 + (details.needsDomain ? 25 : 0)
+    const totalPrice = pricing.setup + (details.needsDomain ? pricing.domain : 0)
 
     const updateData: Record<string, unknown> = {
       closing_summary: call.summary,
@@ -170,7 +178,7 @@ export async function pollClosingCall(leadId: string): Promise<string | null> {
       try {
         const paymentUrl = await createCheckoutLink(leadId, lead.name, details.needsDomain)
         updateData.stripe_payment_link = paymentUrl
-        lead.stripe_payment_link = paymentUrl
+        ;(lead as any).stripe_payment_link = paymentUrl
       } catch (err) {
         await agentLog('closer', `Stripe link failed: ${String(err)}`, { leadId, level: 'warn' })
       }
@@ -304,9 +312,9 @@ function buildJobSpec(lead: any, details: ClosingDetails, totalPrice: number): s
     changesLine,
     ``,
     `Here's the cost breakdown:`,
-    `  Website setup: £35`,
-    details.needsDomain ? `  Domain + email: £25` : '',
-    `  Ongoing hosting + changes: £5/month`,
+    `  Website setup: £${pricing.setup}`,
+    details.needsDomain ? `  Domain + email: £${pricing.domain}` : '',
+    `  Ongoing hosting + changes: £${pricing.monthly}/month`,
     ``,
     `Total to get started: £${totalPrice}`,
     ``,
@@ -316,7 +324,7 @@ function buildJobSpec(lead: any, details: ClosingDetails, totalPrice: number): s
     lead.stripe_payment_link || '[Payment link will be added here]',
     ``,
     `Any questions at all, just reply to this message. Cheers!`,
-    `— ${process.env.AGENCY_CALLER_NAME || 'Alex'}, ${process.env.AGENCY_NAME || 'Web Agency'}`,
+    `— ${agency.callerName}, ${agency.name}`,
   ].filter(Boolean)
 
   return lines.join('\n')

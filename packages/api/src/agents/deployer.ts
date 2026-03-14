@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
+import { fetchWithRetry } from '../lib/fetch-retry'
 import { execSync } from 'child_process'
 import { readdirSync, readFileSync, statSync } from 'fs'
 import { join, relative } from 'path'
@@ -62,13 +63,16 @@ export async function runDeployerAgent(leadId: string): Promise<string> {
 
   await agentLog('deployer', `Built ${files.length} files, deploying to Vercel...`, { leadId })
 
+  const vercelToken = process.env.VERCEL_TOKEN
+  if (!vercelToken) throw new Error('VERCEL_TOKEN must be set')
+
   // Step 3: Create Vercel project
   const projectName = `wa-${slug}-${Date.now().toString(36)}`
 
-  const createProjectRes = await fetch('https://api.vercel.com/v9/projects', {
+  const createProjectRes = await fetchWithRetry('https://api.vercel.com/v9/projects', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
+      Authorization: `Bearer ${vercelToken}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ name: projectName, framework: null })
@@ -78,20 +82,20 @@ export async function runDeployerAgent(leadId: string): Promise<string> {
   if (!project.id) throw new Error(`Failed to create Vercel project: ${JSON.stringify(project)}`)
 
   // Step 3b: Disable deployment protection so the site is publicly accessible
-  await fetch(`https://api.vercel.com/v9/projects/${project.id}`, {
+  await fetchWithRetry(`https://api.vercel.com/v9/projects/${project.id}`, {
     method: 'PATCH',
     headers: {
-      Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
+      Authorization: `Bearer ${vercelToken}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({ ssoProtection: null, passwordProtection: null })
   })
 
   // Step 4: Deploy dist/ via file upload
-  const deployRes = await fetch('https://api.vercel.com/v13/deployments', {
+  const deployRes = await fetchWithRetry('https://api.vercel.com/v13/deployments', {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${process.env.VERCEL_TOKEN}`,
+      Authorization: `Bearer ${vercelToken}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({

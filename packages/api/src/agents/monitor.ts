@@ -21,11 +21,6 @@ export async function runMonitorAgent(): Promise<void> {
   if (!leads || leads.length === 0) return
 
   for (const lead of leads) {
-    // Skip leads already promoted
-    if (['hitl_ready', 'booked', 'closing_call', 'spec_sent', 'paid', 'closed'].includes(lead.status)) {
-      continue
-    }
-
     let score = 0
     const signals: string[] = []
 

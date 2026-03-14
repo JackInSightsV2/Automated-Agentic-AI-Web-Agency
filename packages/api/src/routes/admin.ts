@@ -14,7 +14,7 @@ import type { QueueName } from '../types'
 
 export const adminRouter = new Hono()
 
-const QUEUE_NAMES: QueueName[] = ['verify', 'build', 'deploy', 'call', 'followup', 'close']
+const QUEUE_NAMES: QueueName[] = ['verify', 'copywrite', 'build', 'seo', 'review', 'deploy', 'call', 'followup', 'close']
 
 // Queue stats
 adminRouter.get('/queues', async (c) => {
@@ -214,7 +214,13 @@ adminRouter.post('/queue-items/:id/skip', async (c) => {
 // Pipeline metrics
 adminRouter.get('/stats', async (c) => {
   const statusCounts: Record<string, number> = {}
-  const statuses = ['discovered', 'verified', 'building', 'built', 'deployed', 'called', 'booked', 'closed', 'rejected', 'paid']
+  const statuses = [
+    'discovered', 'verified', 'copywriting', 'briefed', 'building', 'built',
+    'seo_optimizing', 'seo_optimized', 'reviewing', 'reviewed',
+    'deployed', 'emailed', 'called', 'followed_up', 'clicked', 'booked',
+    'hitl_ready', 'closing_call', 'spec_sent', 'paid', 'delivering', 'delivered',
+    'closed', 'rejected',
+  ]
 
   for (const status of statuses) {
     const { count } = await supabase

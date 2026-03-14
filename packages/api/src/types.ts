@@ -23,6 +23,7 @@ export type LeadStatus =
   | 'paid'
   | 'delivering'
   | 'delivered'
+  | 'followed_up'
   | 'hitl_ready'
   | 'closed'
   | 'rejected'
@@ -79,6 +80,8 @@ export interface Lead {
   creative_brief: string | null
   review_attempts: number | null
   review_result: string | null
+  skip_to_deploy: boolean | null
+  followup_call_id: string | null
 }
 
 export interface PipelineRun {

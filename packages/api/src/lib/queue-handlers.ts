@@ -126,7 +126,8 @@ export async function handleDeploy(item: QueueItem): Promise<void> {
     if (updatedLead.needs_domain) {
       domainInfo.push(`Client needs us to register a domain for them`)
       if (!updatedLead.desired_domain) {
-        const suggestedDomain = updatedLead.name.toLowerCase().replace(/[^a-z0-9]/g, '') + '.co.uk'
+        const defaultTld = process.env.DEFAULT_TLD || '.co.uk'
+        const suggestedDomain = updatedLead.name.toLowerCase().replace(/[^a-z0-9]/g, '') + defaultTld
         domainInfo.push(`Suggested: ${suggestedDomain}`)
       }
     }

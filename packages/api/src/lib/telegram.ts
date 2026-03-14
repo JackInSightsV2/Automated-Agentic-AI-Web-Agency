@@ -277,6 +277,9 @@ bot.onText(/\/resume$/, async (msg) => {
 // ── Callback buttons (HITL actions) ─────────────────────────────────
 
 bot.on('callback_query', async (query) => {
+  // Validate callback origin — only allow from admin chat
+  if (query.message?.chat.id !== ADMIN_ID) return
+
   const data = query.data || ''
 
   // Queue approval callbacks

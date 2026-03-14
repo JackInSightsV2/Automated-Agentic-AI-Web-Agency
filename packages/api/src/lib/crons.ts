@@ -229,3 +229,17 @@ export function stopCrons() {
     monitorInterval = null
   }
 }
+
+// Graceful shutdown — clean up intervals and Telegram bot on process exit
+function handleShutdown(signal: string) {
+  console.log(`[SHUTDOWN] Received ${signal}, cleaning up...`)
+  stopCrons()
+  try {
+    const { bot } = require('./telegram')
+    bot.stopPolling()
+  } catch { /* telegram not loaded */ }
+  process.exit(0)
+}
+
+process.on('SIGTERM', () => handleShutdown('SIGTERM'))
+process.on('SIGINT', () => handleShutdown('SIGINT'))

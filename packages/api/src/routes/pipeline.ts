@@ -4,8 +4,12 @@ import { agentLog } from '../lib/logger'
 import { runScoutAgent } from '../agents/scout'
 import { notify } from '../lib/telegram'
 import { enqueue } from '../lib/queue'
+import { rateLimit } from '../lib/rate-limit'
 
 export const pipelineRouter = new Hono()
+
+// Rate limit public tracking endpoints to prevent abuse
+const trackingLimiter = rateLimit({ windowMs: 60000, max: 60 })
 
 // Start a new pipeline run
 pipelineRouter.post('/start', async (c) => {
@@ -44,7 +48,7 @@ pipelineRouter.get('/status/:runId', async (c) => {
 })
 
 // Tracking: email open pixel
-pipelineRouter.get('/track/open/:leadId', async (c) => {
+pipelineRouter.get('/track/open/:leadId', trackingLimiter, async (c) => {
   const { leadId } = c.req.param()
   await supabase
     .from('leads')
@@ -57,16 +61,24 @@ pipelineRouter.get('/track/open/:leadId', async (c) => {
 })
 
 // Tracking: email click
-pipelineRouter.get('/track/click/:leadId', async (c) => {
+pipelineRouter.get('/track/click/:leadId', trackingLimiter, async (c) => {
   const { leadId } = c.req.param()
   const redirect = c.req.query('redirect') || '/'
+
+  // Prevent open redirect — only allow redirects to our own deployments or calendly
+  const allowed = redirect === '/' ||
+    redirect.startsWith('https://') && (
+      redirect.includes('.vercel.app') ||
+      redirect.includes('calendly.com')
+    )
+  const safeRedirect = allowed ? redirect : '/'
 
   await supabase
     .from('leads')
     .update({ email_clicked_at: new Date().toISOString(), status: 'clicked', status_updated_at: new Date().toISOString() })
     .eq('id', leadId)
 
-  return c.redirect(redirect)
+  return c.redirect(safeRedirect)
 })
 
 // HITL — finalise with custom domain
@@ -82,7 +94,7 @@ pipelineRouter.post('/hitl/finalise', async (c) => {
 })
 
 // Send Telegram message with site link to a lead
-pipelineRouter.post('/notify/:leadId', async (c) => {
+pipelineRouter.post('/notify/:leadId', trackingLimiter, async (c) => {
   const { leadId } = c.req.param()
   try {
     const { data: lead } = await supabase.from('leads').select('name, vercel_deployment_url').eq('id', leadId).single()

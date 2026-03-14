@@ -1,3 +1,5 @@
+import { fetchWithRetry } from './fetch-retry'
+
 const STRIPE_API = 'https://api.stripe.com/v1'
 
 function getKey(): string {
@@ -6,7 +8,7 @@ function getKey(): string {
   return key
 }
 
-function headers() {
+function stripeHeaders() {
   return {
     Authorization: `Bearer ${getKey()}`,
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -19,8 +21,8 @@ function encode(params: Record<string, string>): string {
 
 /** Create a Stripe Checkout Session and return the URL */
 export async function createCheckoutLink(leadId: string, leadName: string, needsDomain: boolean): Promise<string> {
-  const setupPrice = process.env.STRIPE_PRICE_SETUP!
-  const domainPrice = process.env.STRIPE_PRICE_DOMAIN!
+  const setupPrice = process.env.STRIPE_PRICE_SETUP
+  if (!setupPrice) throw new Error('STRIPE_PRICE_SETUP must be set in .env')
 
   const params: Record<string, string> = {
     'mode': 'payment',
@@ -34,13 +36,15 @@ export async function createCheckoutLink(leadId: string, leadName: string, needs
   }
 
   if (needsDomain) {
+    const domainPrice = process.env.STRIPE_PRICE_DOMAIN
+    if (!domainPrice) throw new Error('STRIPE_PRICE_DOMAIN must be set in .env')
     params['line_items[1][price]'] = domainPrice
     params['line_items[1][quantity]'] = '1'
   }
 
-  const res = await fetch(`${STRIPE_API}/checkout/sessions`, {
+  const res = await fetchWithRetry(`${STRIPE_API}/checkout/sessions`, {
     method: 'POST',
-    headers: headers(),
+    headers: stripeHeaders(),
     body: encode(params),
   })
 
@@ -53,8 +57,8 @@ export async function createCheckoutLink(leadId: string, leadName: string, needs
 
 /** List recent completed checkout sessions and return those with lead_id metadata */
 export async function checkPaidSessions(): Promise<Array<{ leadId: string; sessionId: string; amountTotal: number }>> {
-  const res = await fetch(`${STRIPE_API}/checkout/sessions?status=complete&limit=20`, {
-    headers: headers(),
+  const res = await fetchWithRetry(`${STRIPE_API}/checkout/sessions?status=complete&limit=20`, {
+    headers: stripeHeaders(),
   })
 
   const data = await res.json() as { data?: Array<{ id: string; metadata?: Record<string, string>; amount_total?: number; payment_status?: string }> }
@@ -68,4 +72,40 @@ export async function checkPaidSessions(): Promise<Array<{ leadId: string; sessi
       sessionId: s.id,
       amountTotal: (s.amount_total || 0) / 100,
     }))
+}
+
+/**
+ * Verify a Stripe webhook signature using HMAC-SHA256.
+ * Returns the parsed event if valid, null if invalid.
+ */
+export function verifyWebhookSignature(payload: string, signature: string): any | null {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET
+  if (!secret) return null
+
+  const crypto = require('crypto') as typeof import('crypto')
+
+  // Stripe signature format: t=timestamp,v1=signature
+  const parts = signature.split(',')
+  const timestamp = parts.find(p => p.startsWith('t='))?.slice(2)
+  const sig = parts.find(p => p.startsWith('v1='))?.slice(3)
+
+  if (!timestamp || !sig) return null
+
+  // Verify the signature
+  const signedPayload = `${timestamp}.${payload}`
+  const expected = crypto.createHmac('sha256', secret).update(signedPayload).digest('hex')
+
+  if (!crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) {
+    return null
+  }
+
+  // Check timestamp is within 5 minutes
+  const ageSeconds = Math.abs(Date.now() / 1000 - parseInt(timestamp))
+  if (ageSeconds > 300) return null
+
+  try {
+    return JSON.parse(payload)
+  } catch {
+    return null
+  }
 }

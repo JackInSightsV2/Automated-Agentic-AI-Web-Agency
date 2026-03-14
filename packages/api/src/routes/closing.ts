@@ -3,13 +3,18 @@ import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
 import { runCloserAgent, pollClosingCall } from '../agents/closer'
-import { runDeliveryAgent } from '../agents/delivery'
-import { createCheckoutLink } from '../lib/stripe'
+import { runDeliveryPipeline } from '../agents/delivery'
+import { createCheckoutLink, verifyWebhookSignature } from '../lib/stripe'
+import { rateLimit } from '../lib/rate-limit'
+import { agency } from '../lib/config'
 
 export const closingRouter = new Hono()
 
+// Rate limit the Calendly webhook to prevent abuse
+const webhookLimiter = rateLimit({ windowMs: 60000, max: 30 })
+
 // Calendly webhook — fires when someone books a call
-closingRouter.post('/calendly/webhook', async (c) => {
+closingRouter.post('/calendly/webhook', webhookLimiter, async (c) => {
   const body = await c.req.json()
 
   const event = body.event || body.payload?.event
@@ -102,11 +107,10 @@ closingRouter.get('/poll/:leadId', async (c) => {
 
 // Stripe checkout success redirect — shows a thank you page
 closingRouter.get('/payment-success', async (c) => {
-  const sessionId = c.req.query('session_id')
   return c.html(`
     <!DOCTYPE html>
     <html>
-    <head><title>Payment Received — ${process.env.AGENCY_NAME || 'Web Agency'}</title>
+    <head><title>Payment Received — ${agency.name}</title>
     <style>
       body { font-family: system-ui; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; background: #fafafa; }
       .card { text-align: center; max-width: 480px; padding: 48px; background: white; border-radius: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
@@ -119,14 +123,82 @@ closingRouter.get('/payment-success', async (c) => {
         <h1>Thanks for your payment!</h1>
         <p>We've received your payment and we're getting to work on your website right away.</p>
         <p>We'll send you a message once the changes are done and the site is ready for you to review before we connect your domain.</p>
-        <p style="margin-top: 24px; font-weight: 600; color: #E84393;">— ${process.env.AGENCY_NAME || 'Web Agency'}</p>
+        <p style="margin-top: 24px; font-weight: 600; color: #E84393;">— ${agency.name}</p>
       </div>
     </body>
     </html>
   `)
 })
 
-// Mark as paid (manual or cron trigger) and start delivery
+// Stripe webhook — instant payment notification (complements polling)
+closingRouter.post('/stripe/webhook', async (c) => {
+  const sig = c.req.header('stripe-signature')
+  if (!sig) return c.json({ error: 'Missing stripe-signature header' }, 400)
+
+  const body = await c.req.text()
+  const event = verifyWebhookSignature(body, sig)
+
+  if (!event) {
+    // If no webhook secret configured, fall back to trusting the payload
+    // (polling is the primary mechanism; webhook is supplementary)
+    if (!process.env.STRIPE_WEBHOOK_SECRET) {
+      try {
+        const parsed = JSON.parse(body)
+        await handleStripeEvent(parsed)
+        return c.json({ received: true })
+      } catch {
+        return c.json({ error: 'Invalid payload' }, 400)
+      }
+    }
+    return c.json({ error: 'Invalid signature' }, 400)
+  }
+
+  await handleStripeEvent(event)
+  return c.json({ received: true })
+})
+
+async function handleStripeEvent(event: any) {
+  if (event.type !== 'checkout.session.completed') return
+
+  const session = event.data?.object
+  const leadId = session?.metadata?.lead_id
+  if (!leadId) return
+
+  const { data: lead } = await supabase
+    .from('leads')
+    .select('id, name, status, paid_at, contact_name')
+    .eq('id', leadId)
+    .single()
+
+  if (!lead || lead.paid_at || lead.status !== 'spec_sent') return
+
+  const contactName = lead.contact_name || lead.name.split(' ')[0]
+  const amountTotal = (session.amount_total || 0) / 100
+
+  await supabase.from('leads').update({
+    status: 'paid',
+    status_updated_at: new Date().toISOString(),
+    paid_at: new Date().toISOString(),
+  }).eq('id', leadId)
+
+  await agentLog('stripe', `Webhook: payment received for ${lead.name}: £${amountTotal}`, {
+    leadId,
+    level: 'success'
+  })
+
+  await notify(
+    `Payment received (webhook) from ${contactName} (${lead.name}) — £${amountTotal}!\n\n` +
+    `Starting delivery pipeline...`
+  )
+
+  runDeliveryPipeline(leadId).catch(async (err) => {
+    await agentLog('delivery', `Delivery pipeline failed for ${lead.name}: ${String(err)}`, {
+      leadId, level: 'error'
+    })
+  })
+}
+
+// Mark as paid (manual trigger) and start delivery
 closingRouter.post('/paid/:leadId', async (c) => {
   const { leadId } = c.req.param()
 
@@ -150,21 +222,21 @@ closingRouter.post('/paid/:leadId', async (c) => {
     `Payment received from ${contactName} (${lead.name}) — £${lead.total_price}!\n\n` +
     `Domain: ${lead.desired_domain || (lead.needs_domain ? 'Needs registration' : 'TBC')}\n` +
     `Changes: ${lead.requested_changes || 'None'}\n\n` +
-    `Starting delivery...`
+    `Starting delivery pipeline...`
   )
 
   await agentLog('closer', `Payment received for ${lead.name}: £${lead.total_price}`, {
     leadId, level: 'success'
   })
 
-  // Trigger delivery agent in background
-  runDeliveryAgent(leadId).catch(async (err) => {
-    await agentLog('delivery', `Delivery failed for ${lead.name}: ${String(err)}`, {
+  // Trigger delivery pipeline: apply changes → SEO → review → deploy
+  runDeliveryPipeline(leadId).catch(async (err) => {
+    await agentLog('delivery', `Delivery pipeline failed for ${lead.name}: ${String(err)}`, {
       leadId, level: 'error'
     })
   })
 
-  return c.json({ success: true, message: 'Paid — delivery started' })
+  return c.json({ success: true, message: 'Paid — delivery pipeline started' })
 })
 
 // Generate a payment link for a lead (manual)
@@ -194,8 +266,10 @@ closingRouter.post('/payment-link/:leadId', async (c) => {
 closingRouter.post('/deliver/:leadId', async (c) => {
   const { leadId } = c.req.param()
   try {
-    runDeliveryAgent(leadId).catch(() => {})
-    return c.json({ success: true, message: 'Delivery started' })
+    runDeliveryPipeline(leadId).catch(async (err) => {
+      await agentLog('delivery', `Manual delivery failed: ${String(err)}`, { leadId, level: 'error' })
+    })
+    return c.json({ success: true, message: 'Delivery pipeline started' })
   } catch (err) {
     return c.json({ success: false, error: String(err) }, 500)
   }

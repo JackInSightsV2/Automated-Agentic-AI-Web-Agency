@@ -1,5 +1,7 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
+import { fetchWithRetry } from '../lib/fetch-retry'
+import { agency, getCallPhone } from '../lib/config'
 
 export async function runCallerAgent(leadId: string): Promise<void> {
   const { data: lead } = await supabase
@@ -15,18 +17,16 @@ export async function runCallerAgent(leadId: string): Promise<void> {
 
   await agentLog('caller', `Initiating call to: ${lead.name} (${lead.phone})`, { leadId })
 
-  // HACKATHON: always call the demo number
-  const phone = process.env.AGENCY_PHONE || lead.phone
-
+  const phone = getCallPhone(lead.phone)
   const hasEmail = !!lead.email
 
-  const task = `You are ${process.env.AGENCY_CALLER_NAME || 'Alex'}, a friendly business development rep at ${process.env.AGENCY_NAME || 'Web Agency'}, a web design studio that helps local businesses get online. You're making a warm introductory call. Be natural, conversational, and human -- NOT robotic or salesy. Use a warm British tone.
+  const task = `You are ${agency.callerName}, a friendly business development rep at ${agency.name}, a web design studio that helps local businesses get online. You're making a warm introductory call. Be natural, conversational, and human -- NOT robotic or salesy. Use a warm British tone.
 
 IMPORTANT: Take your time. Don't rush. Pause between points. Let them respond. This should feel like a genuine conversation, not a sales pitch.
 
 Here's how the call should flow:
 
-1. WARM GREETING: "Hi there! Am I speaking with someone from ${lead.name}? ... Lovely! And what's your name? ... [REMEMBER THEIR NAME AND USE IT THROUGHOUT THE REST OF THE CALL] ... Nice to meet you [NAME]! My name's ${process.env.AGENCY_CALLER_NAME || 'Alex'}, I'm calling from a company called ${process.env.AGENCY_NAME || 'Web Agency'} -- we're a small web design studio based in London."
+1. WARM GREETING: "Hi there! Am I speaking with someone from ${lead.name}? ... Lovely! And what's your name? ... [REMEMBER THEIR NAME AND USE IT THROUGHOUT THE REST OF THE CALL] ... Nice to meet you [NAME]! My name's ${agency.callerName}, I'm calling from a company called ${agency.name} -- we're a small web design studio based in London."
 
 2. CONTEXT & REASON FOR CALLING: "The reason I'm reaching out is -- we actually specialise in helping local ${lead.category} businesses get set up online. We came across ${lead.name} and noticed you don't seem to have a website at the moment, so we actually went ahead and put something together for you. Completely free, no strings attached."
 
@@ -34,7 +34,7 @@ Here's how the call should flow:
 
 4. OFFER TO SEND THE LINK:
 ${hasEmail
-  ? `"We've actually already sent the link over by email -- it would have come from ${process.env.AGENCY_EMAIL || 'hello@example.com'}. If you haven't seen it, do check your junk folder. But I'll also text it to you on this number so you've got it handy."`
+  ? `"We've actually already sent the link over by email -- it would have come from ${agency.email}. If you haven't seen it, do check your junk folder. But I'll also text it to you on this number so you've got it handy."`
   : `"What I'd love to do is send you the link so you can have a look for yourself. I'll pop it over as a text message to this number right after the call -- just a link to the site, nothing spammy, I promise."`
 }
 
@@ -47,7 +47,7 @@ ${hasEmail
 
 6. WRAP UP (if they're interested): "Lovely, so I'll text you the link to your new website and a booking link if you'd like to chat further. It was really nice speaking with you -- have a great day!"
 
-7. IF VOICEMAIL: "Hi there, this is ${process.env.AGENCY_CALLER_NAME || 'Alex'} calling from ${process.env.AGENCY_NAME || 'Web Agency'}, a web design studio in London. I'm reaching out to ${lead.name} because we've actually gone ahead and built you a professional website -- completely free, no strings attached. I'll send you a text with the link so you can have a look. If you'd like to chat, feel free to give us a ring back. Have a great day!"
+7. IF VOICEMAIL: "Hi there, this is ${agency.callerName} calling from ${agency.name}, a web design studio in London. I'm reaching out to ${lead.name} because we've actually gone ahead and built you a professional website -- completely free, no strings attached. I'll send you a text with the link so you can have a look. If you'd like to chat, feel free to give us a ring back. Have a great day!"
 
 Business context (use naturally in conversation, don't read out verbatim):
 - Business name: ${lead.name}
@@ -72,10 +72,13 @@ CRITICAL RULES:
 - Only end the call after you've delivered your message and said goodbye properly.
 - If it goes to voicemail, leave the full voicemail message from step 7 above.`
 
-  const res = await fetch('https://api.bland.ai/v1/calls', {
+  const apiKey = process.env.BLAND_AI_API_KEY
+  if (!apiKey) throw new Error('BLAND_AI_API_KEY must be set')
+
+  const res = await fetchWithRetry('https://api.bland.ai/v1/calls', {
     method: 'POST',
     headers: {
-      Authorization: process.env.BLAND_AI_API_KEY!,
+      Authorization: apiKey,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -119,8 +122,11 @@ export async function pollBlandCall(leadId: string): Promise<string | null> {
 
   if (!lead?.bland_call_id) return null
 
-  const res = await fetch(`https://api.bland.ai/v1/calls/${lead.bland_call_id}`, {
-    headers: { Authorization: process.env.BLAND_AI_API_KEY! }
+  const apiKey = process.env.BLAND_AI_API_KEY
+  if (!apiKey) return null
+
+  const res = await fetchWithRetry(`https://api.bland.ai/v1/calls/${lead.bland_call_id}`, {
+    headers: { Authorization: apiKey }
   })
   const call = await res.json() as { status?: string; summary?: string; transcripts?: Array<{ user: string; text: string }> }
 

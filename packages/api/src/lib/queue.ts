@@ -60,13 +60,19 @@ export async function dequeue(queueName: QueueName): Promise<QueueItem | null> {
 
   if (error || !data) return null
 
-  // Mark as processing
-  await supabase
+  // Atomically mark as processing — only if still in the expected status
+  // This prevents race conditions where two workers pick up the same item
+  const { data: updated, error: updateError } = await supabase
     .from('queue_items')
     .update({ status: 'processing', updated_at: new Date().toISOString() })
     .eq('id', data.id)
+    .eq('status', statusFilter)
+    .select()
+    .single()
 
-  return data as QueueItem
+  if (updateError || !updated) return null // Already picked up by another worker
+
+  return updated as QueueItem
 }
 
 export async function completeItem(itemId: string): Promise<void> {
