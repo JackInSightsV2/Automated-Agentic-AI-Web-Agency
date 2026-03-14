@@ -1,0 +1,67 @@
+@media (max-width: 1024px) {
+  .services__grid,
+  .testimonials__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .work__grid { grid-template-columns: 1fr 1fr; }
+  .work-card--wide { grid-column: span 2; }
+}
+
+@media (max-width: 768px) {
+  :root { --section-padding: 72px 0; }
+
+  .nav__links {
+    position: fixed;
+    top: 0;
+    right: -100%;
+    width: 280px;
+    height: 100vh;
+    background: var(--white);
+    flex-direction: column;
+    padding: 80px 32px 32px;
+    gap: 24px;
+    box-shadow: -10px 0 40px rgba(0, 0, 0, 0.1);
+    transition: right 0.3s var(--ease);
+  }
+
+  .nav__links.open { right: 0; }
+
+  .nav__toggle { display: flex; z-index: 1001; }
+
+  .nav__toggle.open span:nth-child(1) { transform: rotate(45deg) translate(5px, 5px); }
+  .nav__toggle.open span:nth-child(2) { opacity: 0; }
+  .nav__toggle.open span:nth-child(3) { transform: rotate(-45deg) translate(5px, -5px); }
+
+  .hero { padding: 130px 0 72px; }
+  .hero__title { font-size: clamp(2.5rem, 10vw, 3.5rem); }
+  .hero__stats { gap: 32px; }
+
+  .services__grid,
+  .testimonials__grid { grid-template-columns: 1fr; }
+
+  .work__grid { grid-template-columns: 1fr; }
+  .work-card--wide { grid-column: span 1; }
+
+  .contact__grid { grid-template-columns: 1fr; gap: 40px; }
+  .contact__info .section-title { text-align: center; }
+  .contact__info { text-align: center; }
+  .contact__details { align-items: center; }
+
+  .step { flex-direction: column; gap: 12px; text-align: center; }
+  .step__number { width: auto; }
+
+  .pricing-card__price-row { flex-direction: column; gap: 12px; text-align: center; }
+  .pricing-card__price .price { font-size: 2rem; }
+
+  .footer__inner { grid-template-columns: 1fr; text-align: center; }
+  .footer__links { justify-self: center; }
+  .footer__brand p { margin: 12px auto 0; }
+}
+
+@media (max-width: 480px) {
+  .hero__cta { flex-direction: column; align-items: center; }
+  .hero__stats { flex-direction: column; gap: 16px; }
+  .contact__form { padding: 28px 20px; }
+  .pricing-card { padding: 32px 24px; }
+}

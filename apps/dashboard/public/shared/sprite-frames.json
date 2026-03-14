@@ -1,0 +1,28 @@
+{
+  "sheet": {
+    "cols": 8,
+    "rows": 9,
+    "frameWidth": 48,
+    "frameHeight": 64
+  },
+  "frames": {
+    "front_idle":      [0,  1,  2,  3],
+    "front_walk":      [4,  5,  6,  7],
+    "front_sit_idle":  [8,  9,  10, 11],
+    "front_sit_work":  [12, 13, 14, 15],
+    "left_idle":       [16, 17, 18, 19],
+    "left_walk":       [20, 21, 22, 23],
+    "left_sit_idle":   [24, 25, 26, 27],
+    "left_sit_work":   [28, 29, 30, 31],
+    "right_idle":      [32, 33, 34, 35],
+    "right_walk":      [36, 37, 38, 39],
+    "right_sit_idle":  [40, 41, 42, 43],
+    "right_sit_work":  [44, 45, 46, 47],
+    "back_idle":       [48, 49, 50, 51],
+    "back_walk":       [52, 53, 54, 55],
+    "back_sit_idle":   [56, 57, 58, 59],
+    "back_sit_work":   [60, 61, 62, 63],
+    "front_done_dance":[64, 65, 66, 67],
+    "front_alert_jump":[68, 69, 70, 71]
+  }
+}
