@@ -1,7 +1,7 @@
 {
   "name": "automated-web-agency",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": ["apps/*", "packages/*", "site"],
   "scripts": {
     "dev": "bun run --filter '*' dev",
     "api": "bun run packages/api/src/index.ts",
