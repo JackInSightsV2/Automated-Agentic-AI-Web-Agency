@@ -79,6 +79,16 @@ This system runs an entire web agency autonomously:
 - **Image Generation:** Gemini
 - **Site Builder:** Claude Code (as subprocess)
 
+### MCP Servers
+
+Three MCP servers give Claude Code direct access to manage services during setup and operation:
+
+| Server | URL | Purpose |
+|--------|-----|---------|
+| `stripe` | `https://mcp.stripe.com` | Products, prices, webhooks, payment links |
+| `supabase` | `https://mcp.supabase.com/mcp` | Tables, migrations, RLS policies |
+| `vercel` | `https://mcp.vercel.com/mcp` | Deployments, domains, env vars |
+
 ## Quick Start
 
 ```bash

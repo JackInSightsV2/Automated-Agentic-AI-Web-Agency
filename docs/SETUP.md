@@ -81,7 +81,21 @@ The skill is already included at `.gemini/skills/nanobanana-imaging/SKILL.md`. I
 
 No additional setup needed -- as long as `GEMINI_API_KEY` is set, the skill works automatically when Claude Code spawns subprocess jobs.
 
-## 9. Claude Code Skills + Plugins
+## 9. MCP Servers
+
+The project configures three MCP (Model Context Protocol) servers that give Claude Code direct access to manage your services. These are configured in `.claude/mcp.json` and the setup script creates this automatically.
+
+| Server | URL | Purpose |
+|--------|-----|---------|
+| `stripe` | `https://mcp.stripe.com` | Manage Stripe products, prices, webhooks, and payment links |
+| `supabase` | `https://mcp.supabase.com/mcp` | Manage Supabase projects, tables, migrations, and RLS policies |
+| `vercel` | `https://mcp.vercel.com/mcp` | Manage Vercel deployments, domains, and environment variables |
+
+These are especially useful during initial setup — Claude Code can help you create your Stripe products, set up your Supabase schema, and configure Vercel deployments directly through conversation.
+
+Each server will prompt you to authenticate on first use via your browser.
+
+## 10. Claude Code Skills + Plugins
 
 The system's agents spawn Claude Code as subprocesses (via the orchestrator). The spawned sessions have access to any skills/plugins installed on the host machine. The `setup.sh` script handles all of this automatically, but here's the full breakdown.
 
@@ -142,7 +156,7 @@ claude plugin install seo-technical-optimization
 
 The Nano Banana skill source is included in this repo at `.gemini/skills/nanobanana-imaging/`. The setup script copies it to `~/.claude/skills/nano-banana` automatically.
 
-## 10. Calendly Setup
+## 11. Calendly Setup
 
 1. Create account at [calendly.com](https://calendly.com)
 2. Create a 15-30 minute event type
@@ -151,7 +165,7 @@ The Nano Banana skill source is included in this repo at `.gemini/skills/nanoban
    - Point webhook to `YOUR_API_URL/closing/calendly/webhook`
    - Subscribe to `invitee.created` events
 
-## 11. Twilio Setup (Optional -- SMS/WhatsApp)
+## 12. Twilio Setup (Optional -- SMS/WhatsApp)
 
 1. Create account at [twilio.com](https://twilio.com)
 2. Get credentials -> `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`

@@ -158,6 +158,37 @@ SETTINGS_EOF
   ok "Created Claude Code project settings"
 fi
 
+# ── Configure MCP servers ────────────────────────────────────
+
+header "Configuring MCP servers"
+
+MCP_CONFIG="$PROJECT_ROOT/.claude/mcp.json"
+
+if [ -f "$MCP_CONFIG" ]; then
+  ok "MCP server config already exists"
+else
+  cat > "$MCP_CONFIG" << 'MCP_EOF'
+{
+  "mcpServers": {
+    "stripe": {
+      "type": "http",
+      "url": "https://mcp.stripe.com"
+    },
+    "supabase": {
+      "type": "http",
+      "url": "https://mcp.supabase.com/mcp"
+    },
+    "vercel": {
+      "type": "http",
+      "url": "https://mcp.vercel.com/mcp"
+    }
+  }
+}
+MCP_EOF
+  ok "Created MCP server config with Stripe, Supabase, and Vercel"
+  info "These give Claude Code direct access to manage your services during setup"
+fi
+
 # ── Register plugin marketplaces ─────────────────────────────
 
 header "Registering Claude Code plugin marketplaces"
