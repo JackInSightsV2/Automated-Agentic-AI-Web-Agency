@@ -69,7 +69,7 @@ The SEO agent uses the **Nano Banana** skill (via Gemini CLI) to generate hero i
 
 ### Install Gemini CLI
 ```bash
-npm install -g @anthropic-ai/gemini-cli
+npm install -g @anthropic-ai/gemini-cli   # or see https://github.com/google-gemini/gemini-cli
 ```
 
 ### Get a Gemini API Key
