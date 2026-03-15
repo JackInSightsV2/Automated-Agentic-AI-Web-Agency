@@ -1,9 +1,9 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
-import { randomUUID } from 'crypto'
-import { cpSync, existsSync, readFileSync } from 'fs'
-import { join, sep } from 'path'
+import { randomUUID } from 'node:crypto'
+import { cpSync, existsSync, } from 'node:fs'
+import { join, sep } from 'node:path'
 
 /** Filter that skips node_modules and .git when copying */
 const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')
@@ -43,7 +43,7 @@ CREATIVE BRIEF (follow this closely):
   }
 
   // Check if this is a rebuild after failed review
-  const reviewErrors = lead.error && lead.error.includes('Review score') ? `
+  const reviewErrors = lead.error?.includes('Review score') ? `
 IMPORTANT — PREVIOUS REVIEW FEEDBACK (fix these issues):
 ${lead.error}
 ` : ''
@@ -88,11 +88,11 @@ Write all files to the current directory. Make sure to create the src/ directory
   const jobDir = `/tmp/webagency-jobs/${jobId}`
 
   // If this is a review retry, copy existing site files so builder can fix rather than rebuild
-  const isReviewRetry = !!(lead.error && lead.error.includes('Review score'))
+  const isReviewRetry = !!(lead.error?.includes('Review score'))
   const previewExists = existsSync(join(PREVIEW_DIR, slug))
 
   if (isReviewRetry && previewExists) {
-    const { mkdirSync } = await import('fs')
+    const { mkdirSync } = await import('node:fs')
     mkdirSync(jobDir, { recursive: true })
     cpSync(join(PREVIEW_DIR, slug), jobDir, { recursive: true, filter: skipNodeModules })
     await agentLog('builder', `Review retry — copying existing site for fixes`, { leadId })
@@ -120,9 +120,9 @@ Do NOT run any build commands.`
 
   // Verify we got the essential files
   const hasIndex = result.files['index.html']
-  const hasPackageJson = result.files['package.json']
-  const hasMainJs = result.files['src/main.js']
-  const hasStyleCss = result.files['src/style.css']
+  const _hasPackageJson = result.files['package.json']
+  const _hasMainJs = result.files['src/main.js']
+  const _hasStyleCss = result.files['src/style.css']
 
   if (!hasIndex && !isReviewRetry) {
     const fileList = Object.keys(result.files).join(', ')

@@ -4,7 +4,7 @@ import { renderQueuePanel } from '../components/queue-panel.js'
 import { renderStatsPanel } from '../components/stats-panel.js'
 import { renderLogFeed } from '../components/log-feed.js'
 import { renderLeadList } from '../components/lead-card.js'
-import { generateCEOEmails, renderCEOInbox, resetCEOInbox } from '../components/ceo-inbox.js'
+import { generateCEOEmails, renderCEOInbox, } from '../components/ceo-inbox.js'
 import { AgentTerminal } from '../components/agent-terminal.js'
 import { api } from '../api.js'
 

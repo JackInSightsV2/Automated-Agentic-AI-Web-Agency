@@ -39,7 +39,7 @@ const tgRes = await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BO
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    chat_id: parseInt(process.env.TELEGRAM_ADMIN_CHAT_ID!),
+    chat_id: Number.parseInt(process.env.TELEGRAM_ADMIN_CHAT_ID!),
     text: msg,
   })
 })

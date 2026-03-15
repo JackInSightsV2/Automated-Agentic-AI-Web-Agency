@@ -60,7 +60,7 @@ export function renderRunPanel(container) {
   runBtn.addEventListener('click', async () => {
     const query = queryInput.value.trim()
     const location = locationInput.value.trim() || 'London'
-    const limit = parseInt(limitSelect.value) || 3
+    const limit = Number.parseInt(limitSelect.value) || 3
 
     if (!query) {
       statusEl.textContent = 'Pick a business type first'

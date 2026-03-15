@@ -17,7 +17,7 @@ export async function fetchWithRetry(
 
       // Retry on server errors (5xx), not client errors (4xx)
       if (res.status >= 500 && attempt < maxRetries) {
-        await sleep(baseBackoff * Math.pow(2, attempt))
+        await sleep(baseBackoff * 2 ** attempt)
         continue
       }
 
@@ -25,7 +25,7 @@ export async function fetchWithRetry(
     } catch (err) {
       lastError = err
       if (attempt < maxRetries) {
-        await sleep(baseBackoff * Math.pow(2, attempt))
+        await sleep(baseBackoff * 2 ** attempt)
       }
     }
   }

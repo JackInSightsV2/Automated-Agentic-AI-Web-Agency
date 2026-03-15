@@ -12,7 +12,7 @@ interface Place {
   types?: string[]
 }
 
-async function runMockScout(query: string, pipelineRunId: string, limit: number = 3): Promise<string[]> {
+async function runMockScout(query: string, pipelineRunId: string, limit = 3): Promise<string[]> {
   await agentLog('scout', `[MOCK] Searching: ${query}`, { runId: pipelineRunId })
 
   const mockData = await import('../data/mock-places.json')
@@ -80,7 +80,7 @@ async function runMockScout(query: string, pipelineRunId: string, limit: number 
   return leadIds
 }
 
-export async function runScoutAgent(query: string, pipelineRunId: string, limit: number = 3): Promise<string[]> {
+export async function runScoutAgent(query: string, pipelineRunId: string, limit = 3): Promise<string[]> {
   // Mock toggle
   if (process.env.MOCK_SCOUT === 'true') {
     return runMockScout(query, pipelineRunId, limit)

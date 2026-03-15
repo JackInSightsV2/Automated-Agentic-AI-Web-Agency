@@ -15,10 +15,10 @@ export function loadAllOfficeSkins() {
     const img = new Image()
     img.src = '/characters/' + filename + '?v=' + ts
     officeSkinImages[filename] = img
-    promises.push(new Promise(function (resolve) {
+    promises.push(new Promise((resolve) => {
       if (img.complete) { resolve(); return }
-      img.onload = function () { resolve() }
-      img.onerror = function () {
+      img.onload = () => { resolve() }
+      img.onerror = () => {
         console.error('[OfficeSprite] Failed to load:', img.src)
         resolve()
       }

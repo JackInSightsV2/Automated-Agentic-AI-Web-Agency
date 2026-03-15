@@ -3,8 +3,8 @@ import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
 import { enqueue } from '../lib/queue'
 import { runJob } from '../lib/orchestrator'
-import { existsSync, cpSync } from 'fs'
-import { join, sep } from 'path'
+import { existsSync, cpSync } from 'node:fs'
+import { join, sep } from 'node:path'
 
 /** Filter that skips node_modules and .git when copying */
 const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')
@@ -82,12 +82,11 @@ export async function applyDeliveryChanges(leadId: string): Promise<boolean> {
     cpSync(jobDir, previewDir, { recursive: true, filter: skipNodeModules })
     await agentLog('delivery', `Changes applied for ${lead.name}`, { leadId, level: 'success' })
     return true
-  } else {
+  }
     await agentLog('delivery', `Claude Code failed to apply changes: ${result.error}`, {
       leadId, level: 'error'
     })
     return false
-  }
 }
 
 /**

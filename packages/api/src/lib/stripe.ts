@@ -82,7 +82,7 @@ export function verifyWebhookSignature(payload: string, signature: string): any 
   const secret = process.env.STRIPE_WEBHOOK_SECRET
   if (!secret) return null
 
-  const crypto = require('crypto') as typeof import('crypto')
+  const crypto = require('node:crypto') as typeof import('crypto')
 
   // Stripe signature format: t=timestamp,v1=signature
   const parts = signature.split(',')
@@ -100,7 +100,7 @@ export function verifyWebhookSignature(payload: string, signature: string): any 
   }
 
   // Check timestamp is within 5 minutes
-  const ageSeconds = Math.abs(Date.now() / 1000 - parseInt(timestamp))
+  const ageSeconds = Math.abs(Date.now() / 1000 - Number.parseInt(timestamp))
   if (ageSeconds > 300) return null
 
   try {

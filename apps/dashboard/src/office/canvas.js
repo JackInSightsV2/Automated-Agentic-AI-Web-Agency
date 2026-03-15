@@ -10,7 +10,7 @@ import { officeCharacters } from './character.js'
 let officeInitialized = false
 
 // Track spawned worker clones per queue: { build: 4, deploy: 1, ... }
-let activeWorkerCounts = {}
+const activeWorkerCounts = {}
 
 export async function initOffice(canvas) {
   if (officeInitialized) {
@@ -121,7 +121,7 @@ export function updateOfficeFromSSE(data) {
 
   // Collect pipeline-wide context for idle behaviours
   const totalLeads = data.activeLeads?.length || 0
-  const hasActivity = data.recentLogs?.length > 0
+  const _hasActivity = data.recentLogs?.length > 0
   const deployedLeads = data.activeLeads?.filter(l => ['deployed', 'emailed', 'called', 'booked', 'closed', 'paid'].includes(l.status)) || []
   const calledLeads = data.activeLeads?.filter(l => ['called', 'hitl_ready'].includes(l.status)) || []
   const bookedLeads = data.activeLeads?.filter(l => l.status === 'booked') || []

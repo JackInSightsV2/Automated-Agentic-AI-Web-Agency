@@ -1,9 +1,9 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
-import { randomUUID } from 'crypto'
-import { cpSync, existsSync } from 'fs'
-import { join, sep } from 'path'
+import { randomUUID } from 'node:crypto'
+import { cpSync, existsSync } from 'node:fs'
+import { join, sep } from 'node:path'
 
 /** Filter that skips node_modules and .git when copying */
 const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')

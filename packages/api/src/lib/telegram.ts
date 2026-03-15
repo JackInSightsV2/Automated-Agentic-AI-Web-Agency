@@ -1,10 +1,9 @@
 import TelegramBot from 'node-telegram-bot-api'
 import { supabase } from './supabase'
-import { agentLog } from './logger'
 import type { QueueItem, Lead, QueueName } from '../types'
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, { polling: true })
-const ADMIN_ID = parseInt(process.env.TELEGRAM_ADMIN_CHAT_ID!)
+const ADMIN_ID = Number.parseInt(process.env.TELEGRAM_ADMIN_CHAT_ID!)
 
 // ── Notify helpers ──────────────────────────────────────────────────
 
@@ -85,9 +84,9 @@ bot.onText(/\/start/, async (msg) => {
 
 bot.onText(/\/run (.+)/, async (msg, match) => {
   if (msg.chat.id !== ADMIN_ID) return
-  const parts = match![1].split(' ')
+  const parts = match?.[1]?.split(' ') || []
   const city = parts.pop() || 'London'
-  const type = parts.join(' ') || parts[0]
+  const type = parts.join(' ') || parts[0] || ''
 
   await bot.sendMessage(ADMIN_ID, `🚀 Starting pipeline: *${type}* in *${city}*...`, { parse_mode: 'Markdown' })
 
@@ -170,8 +169,8 @@ bot.onText(/\/queue$/, async (msg) => {
 
 bot.onText(/\/hitl (\w+) (on|off)/, async (msg, match) => {
   if (msg.chat.id !== ADMIN_ID) return
-  const queueName = match![1] as QueueName
-  const mode = match![2] === 'on' ? 'hitl' : 'auto'
+  const queueName = match?.[1] as QueueName
+  const mode = match?.[2] === 'on' ? 'hitl' : 'auto'
 
   const { data: config } = await supabase.from('system_config').select('value').eq('key', 'hitl_config').single()
   const hitlConfig = (config?.value || {}) as Record<string, string>
@@ -183,8 +182,8 @@ bot.onText(/\/hitl (\w+) (on|off)/, async (msg, match) => {
 
 bot.onText(/\/hours (\d{2}:\d{2}) (\d{2}:\d{2})/, async (msg, match) => {
   if (msg.chat.id !== ADMIN_ID) return
-  const start = match![1]
-  const end = match![2]
+  const start = match?.[1]
+  const end = match?.[2]
 
   const { data: config } = await supabase.from('system_config').select('value').eq('key', 'business_hours').single()
   const hours = (config?.value || {}) as Record<string, unknown>
@@ -197,8 +196,8 @@ bot.onText(/\/hours (\d{2}:\d{2}) (\d{2}:\d{2})/, async (msg, match) => {
 
 bot.onText(/\/workers (\w+) (\d+)/, async (msg, match) => {
   if (msg.chat.id !== ADMIN_ID) return
-  const queueName = match![1] as QueueName
-  const count = parseInt(match![2])
+  const queueName = match?.[1] as QueueName
+  const count = Number.parseInt(match?.[2] || '1')
 
   const { setConcurrency } = await import('./queue')
   await setConcurrency(queueName, count)

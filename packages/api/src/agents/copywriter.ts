@@ -1,7 +1,7 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
-import { randomUUID } from 'crypto'
+import { randomUUID } from 'node:crypto'
 
 export async function runCopywriterAgent(leadId: string): Promise<void> {
   await supabase.from('leads').update({

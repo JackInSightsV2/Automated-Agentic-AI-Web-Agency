@@ -40,7 +40,10 @@ export async function parseMapCoordinates(bgW, bgH) {
   for (let y = 0; y < canvas.height; y++) {
     for (let x = 0; x < canvas.width; x++) {
       const idx = (y * canvas.width + x) * 4
-      const r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3]
+      const r = data[idx]
+      const g = data[idx + 1]
+      const b = data[idx + 2]
+      const a = data[idx + 3]
       if (a < 128) continue
 
       const mapX = x * scaleX
@@ -69,13 +72,13 @@ export async function parseMapCoordinates(bgW, bgH) {
   officeCoords.desk = []
   officeCoords.idle = []
 
-  tempDesk.forEach(function (p) {
+  tempDesk.forEach((p) => {
     officeCoords.desk.push({ x: p.x, y: p.y, id: globalId++, type: 'desk' })
   })
-  tempMeeting.forEach(function (p) {
+  tempMeeting.forEach((p) => {
     officeCoords.desk.push({ x: p.x, y: p.y, id: globalId++, type: 'meeting' })
   })
-  tempIdle.forEach(function (p) {
+  tempIdle.forEach((p) => {
     officeCoords.idle.push({ x: p.x, y: p.y, id: globalId++, type: 'idle' })
   })
 
@@ -108,7 +111,10 @@ export async function parseObjectCoordinates(bgW, bgH) {
   for (let y = 0; y < canvas.height; y++) {
     for (let x = 0; x < canvas.width; x++) {
       const idx = (y * canvas.width + x) * 4
-      const r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3]
+      const r = data[idx]
+      const g = data[idx + 1]
+      const b = data[idx + 2]
+      const a = data[idx + 3]
       if (a < 128) continue
 
       let dir = null

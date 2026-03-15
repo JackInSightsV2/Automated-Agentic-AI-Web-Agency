@@ -5,7 +5,7 @@
 
 import {
   OFFICE, AVATAR_FILES, avatarIndexFromId, getSeatConfig,
-  IDLE_SEAT_MAP, STATE_ZONE_MAP, STATE_COLORS, PIPELINE_AGENTS,
+  IDLE_SEAT_MAP, STATE_ZONE_MAP, PIPELINE_AGENTS,
 } from './config.js'
 import { officeLayers } from './layers.js'
 import { officeCoords } from './coords.js'
@@ -147,10 +147,9 @@ export const officeCharacters = {
   },
 
   updateAll(deltaSec, deltaMs) {
-    const self = this
-    this.characters.forEach(function (char) {
-      self._updateTarget(char)
-      self._updateMovement(char, deltaSec)
+    this.characters.forEach((char) => {
+      this._updateTarget(char)
+      this._updateMovement(char, deltaSec)
       tickOfficeAnimation(char, deltaMs)
     })
   },
@@ -202,16 +201,15 @@ export const officeCharacters = {
     // IDLE / DONE / PAUSED → idle zone
     if (char.path.length > 0 && char.pathIndex < char.path.length) return
 
-    const isAtIdle = coords.idle.some(function (p) {
-      return Math.abs(p.x - char.x) < 5 && Math.abs(p.y - char.y) < 5
-    })
+    const isAtIdle = coords.idle.some((p) => Math.abs(p.x - char.x) < 5 && Math.abs(p.y - char.y) < 5)
 
     if (isAtIdle) return
 
     const occupied = {}
-    this.characters.forEach(function (a) {
+    this.characters.forEach((a) => {
       if (a.id === char.id) return
-      let ax = Math.floor(a.x), ay = Math.floor(a.y)
+      let ax = Math.floor(a.x)
+      let ay = Math.floor(a.y)
       if (a.path.length > 0) {
         const t = a.path[a.path.length - 1]
         ax = Math.floor(t.x)
@@ -220,9 +218,7 @@ export const officeCharacters = {
       occupied[ax + ',' + ay] = true
     })
 
-    const valid = coords.idle.filter(function (p) {
-      return !occupied[Math.floor(p.x) + ',' + Math.floor(p.y)]
-    })
+    const valid = coords.idle.filter((p) => !occupied[Math.floor(p.x) + ',' + Math.floor(p.y)])
 
     if (valid.length > 0) {
       const dest = valid[Math.floor(Math.random() * valid.length)]
@@ -325,7 +321,7 @@ export const officeCharacters = {
       text = agentData.lastMessage.length > 30
         ? agentData.lastMessage.slice(0, 27) + '...'
         : agentData.lastMessage
-      char.bubble = { text, expiresAt: Infinity }
+      char.bubble = { text, expiresAt: Number.POSITIVE_INFINITY }
     } else if (status === 'thinking' && agentData.lastMessage) {
       // Each agent gets a unique cycle length and offset so they're never in sync
       const hash = avatarIndexFromId(char.id)
@@ -360,9 +356,9 @@ export const officeCharacters = {
     } else if (status === 'done') {
       char.bubble = { text: 'Done!', expiresAt: now + 5000 }
     } else if (status === 'error') {
-      char.bubble = { text: 'Error!', expiresAt: Infinity }
+      char.bubble = { text: 'Error!', expiresAt: Number.POSITIVE_INFINITY }
     } else if (status === 'paused') {
-      char.bubble = { text: 'Zzz...', expiresAt: Infinity }
+      char.bubble = { text: 'Zzz...', expiresAt: Number.POSITIVE_INFINITY }
     } else {
       char.bubble = null
     }
@@ -372,7 +368,8 @@ export const officeCharacters = {
     const coords = officeCoords
     if (!coords || !coords.idle || !coords.desk || coords.desk.length === 0) return null
 
-    let avgX = 0, avgY = 0
+    let avgX = 0
+    let avgY = 0
     for (let i = 0; i < coords.desk.length; i++) {
       avgX += coords.desk[i].x
       avgY += coords.desk[i].y
@@ -381,9 +378,10 @@ export const officeCharacters = {
     avgY /= coords.desk.length
 
     const occupied = {}
-    this.characters.forEach(function (a) {
+    this.characters.forEach((a) => {
       if (a.id === char.id) return
-      let ax = Math.floor(a.x), ay = Math.floor(a.y)
+      let ax = Math.floor(a.x)
+      let ay = Math.floor(a.y)
       if (a.path.length > 0) {
         const t = a.path[a.path.length - 1]
         ax = Math.floor(t.x); ay = Math.floor(t.y)
@@ -391,9 +389,7 @@ export const officeCharacters = {
       occupied[ax + ',' + ay] = true
     })
 
-    const candidates = coords.idle.filter(function (p) {
-      return !occupied[Math.floor(p.x) + ',' + Math.floor(p.y)]
-    }).sort(function (a, b) {
+    const candidates = coords.idle.filter((p) => !occupied[Math.floor(p.x) + ',' + Math.floor(p.y)]).sort((a, b) => {
       const da = Math.abs(a.x - avgX) + Math.abs(a.y - avgY)
       const db = Math.abs(b.x - avgX) + Math.abs(b.y - avgY)
       return da - db

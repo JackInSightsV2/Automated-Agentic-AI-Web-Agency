@@ -257,7 +257,7 @@ async function loadPage() {
         await renderSettingsPage(content)
         break
     }
-  } catch (err) {
+  } catch (_err) {
     content.innerHTML = `
       <div class="card" style="text-align:center;padding:40px">
         <p class="text-dim">Waiting for API to be ready...</p>

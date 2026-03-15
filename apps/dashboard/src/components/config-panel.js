@@ -127,7 +127,7 @@ export function renderConfigPanel(container, config) {
     btn.addEventListener('click', async () => {
       const queue = btn.dataset.concurrencySave
       const input = container.querySelector(`[data-concurrency-queue="${queue}"]`)
-      const val = parseInt(input.value) || 1
+      const val = Number.parseInt(input.value) || 1
       const newConfig = { ...concurrency, [queue]: val }
       await api.updateConfig('concurrency', newConfig)
     })

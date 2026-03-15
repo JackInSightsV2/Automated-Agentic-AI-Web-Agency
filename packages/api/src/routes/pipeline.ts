@@ -132,7 +132,7 @@ pipelineRouter.get('/leads', async (c) => {
 })
 
 // Pipeline orchestration — now simplified: scout + enqueue to verify
-async function runPipeline(runId: string, query: string, limit: number = 3) {
+async function runPipeline(runId: string, query: string, limit = 3) {
   try {
     await agentLog('orchestrator', `Pipeline started: "${query}" (limit: ${limit})`, { runId })
 

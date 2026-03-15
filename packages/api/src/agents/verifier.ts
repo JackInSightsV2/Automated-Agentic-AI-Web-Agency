@@ -2,7 +2,7 @@ import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { fetchWithRetry } from '../lib/fetch-retry'
 
-const VIABILITY_THRESHOLD = parseInt(process.env.VIABILITY_THRESHOLD || '40')
+const VIABILITY_THRESHOLD = Number.parseInt(process.env.VIABILITY_THRESHOLD || '40')
 
 interface CompaniesHouseResult {
   company_name: string

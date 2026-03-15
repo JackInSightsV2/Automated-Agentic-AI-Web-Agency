@@ -3,10 +3,6 @@ import { supabase } from '../lib/supabase'
 import {
   getQueueStats,
   setQueueState,
-  isQueueActive,
-  getConcurrency,
-  setConcurrency,
-  getBusinessHours,
   getHITLConfig,
   getQueueStates,
 } from '../lib/queue'
@@ -51,7 +47,7 @@ adminRouter.post('/queues/:name/resume', async (c) => {
 // Leads with filters
 adminRouter.get('/leads', async (c) => {
   const status = c.req.query('status')
-  const limit = parseInt(c.req.query('limit') || '50')
+  const limit = Number.parseInt(c.req.query('limit') || '50')
 
   let query = supabase
     .from('leads')
@@ -242,7 +238,7 @@ adminRouter.get('/stats', async (c) => {
 
 // Recent agent logs
 adminRouter.get('/logs', async (c) => {
-  const limit = parseInt(c.req.query('limit') || '50')
+  const limit = Number.parseInt(c.req.query('limit') || '50')
   const { data } = await supabase
     .from('agent_logs')
     .select('*')

@@ -105,8 +105,10 @@ export const officePathfinder = {
       closedSet[key] = true
 
       for (let i = 0; i < dirs.length; i++) {
-        const dx = dirs[i][0], dy = dirs[i][1]
-        const nx = current.x + dx, ny = current.y + dy
+        const dx = dirs[i][0]
+        const dy = dirs[i][1]
+        const nx = current.x + dx
+        const ny = current.y + dy
         if (!this.isWalkable(nx, ny) || closedSet[nx + ',' + ny]) continue
 
         const cost = (dx !== 0 && dy !== 0) ? 1.4 : 1

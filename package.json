@@ -5,6 +5,12 @@
   "scripts": {
     "dev": "bun run --filter '*' dev",
     "api": "bun run packages/api/src/index.ts",
-    "dashboard": "bun run --cwd apps/dashboard dev"
+    "dashboard": "bun run --cwd apps/dashboard dev",
+    "test": "bun test --cwd packages/api",
+    "lint": "bunx @biomejs/biome check .",
+    "typecheck": "bunx tsc --noEmit -p packages/api/tsconfig.json"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4"
   }
 }

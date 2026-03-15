@@ -1,9 +1,9 @@
 /** Centralised config derived from env vars — no hardcoded values in agent prompts. */
 
 export const pricing = {
-  get setup(): number { return parseInt(process.env.PRICE_SETUP || '35') },
-  get monthly(): number { return parseInt(process.env.PRICE_MONTHLY || '5') },
-  get domain(): number { return parseInt(process.env.PRICE_DOMAIN || '25') },
+  get setup(): number { return Number.parseInt(process.env.PRICE_SETUP || '35') },
+  get monthly(): number { return Number.parseInt(process.env.PRICE_MONTHLY || '5') },
+  get domain(): number { return Number.parseInt(process.env.PRICE_DOMAIN || '25') },
 }
 
 export const agency = {

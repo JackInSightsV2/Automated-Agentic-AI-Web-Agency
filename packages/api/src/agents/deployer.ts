@@ -1,9 +1,9 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { fetchWithRetry } from '../lib/fetch-retry'
-import { execSync } from 'child_process'
-import { readdirSync, readFileSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { execSync } from 'node:child_process'
+import { readdirSync, readFileSync, } from 'node:fs'
+import { join, relative } from 'node:path'
 
 const PREVIEW_DIR = join(process.cwd(), 'preview')
 

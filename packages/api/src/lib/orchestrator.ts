@@ -1,6 +1,6 @@
-import { spawn } from 'child_process'
-import { mkdirSync, readFileSync, statSync } from 'fs'
-import { join, relative } from 'path'
+import { spawn } from 'node:child_process'
+import { mkdirSync, readFileSync, } from 'node:fs'
+import { join, relative } from 'node:path'
 import { agentLog } from './logger'
 
 export type JobProfile = 'scout' | 'builder' | 'deployer' | 'emailer' | 'caller' | 'analyst' | 'delivery' | 'copywriter' | 'seo' | 'reviewer'
@@ -36,7 +36,7 @@ const PROFILES: Record<JobProfile, { maxTurns: number; model?: string }> = {
 
 /** Recursively collect all text files from a directory */
 function collectFiles(dir: string, baseDir: string, files: Record<string, string>) {
-  const { readdirSync } = require('fs') as typeof import('fs')
+  const { readdirSync } = require('node:fs') as typeof import('fs')
   try {
     const entries = readdirSync(dir, { withFileTypes: true })
     for (const entry of entries) {
@@ -81,7 +81,7 @@ export async function runJob(job: Job): Promise<JobResult> {
 
     // Unset CLAUDECODE to allow nested sessions
     const env = { ...process.env }
-    delete env.CLAUDECODE
+    env.CLAUDECODE = undefined
     // Ensure GEMINI_API_KEY is set for nano-banana skill
     if (!env.GEMINI_API_KEY && env.NANOBANANA_GEMINI_API_KEY) {
       env.GEMINI_API_KEY = env.NANOBANANA_GEMINI_API_KEY

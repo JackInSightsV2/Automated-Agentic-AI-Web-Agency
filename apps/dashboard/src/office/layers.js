@@ -4,10 +4,10 @@
  */
 
 export function loadOfficeImage(src) {
-  return new Promise(function (resolve) {
+  return new Promise((resolve) => {
     const img = new Image()
-    img.onload = function () { resolve(img) }
-    img.onerror = function () {
+    img.onload = () => { resolve(img) }
+    img.onerror = () => {
       console.warn('[OfficeLayers] Failed to load:', src)
       const blank = new Image()
       blank.width = 800

@@ -161,7 +161,7 @@ export async function pollBlandCall(leadId: string): Promise<string | null> {
   return null
 }
 
-function inferOutcome(summary: string): string {
+export function inferOutcome(summary: string): string {
   const s = summary.toLowerCase()
   if (s.includes('interested') || s.includes('yes') || s.includes('love') || s.includes('book') || s.includes('whatsapp') || s.includes('send')) return 'interested'
   if (s.includes('voicemail') || s.includes('left message')) return 'voicemail'
@@ -170,7 +170,7 @@ function inferOutcome(summary: string): string {
 }
 
 /** Extract contact name, email, or phone from the call transcript */
-function extractContactInfo(transcripts: Array<{ user: string; text: string }>): { email?: string; altPhone?: string; contactName?: string } {
+export function extractContactInfo(transcripts: Array<{ user: string; text: string }>): { email?: string; altPhone?: string; contactName?: string } {
   const result: { email?: string; altPhone?: string; contactName?: string } = {}
 
   const fullText = transcripts

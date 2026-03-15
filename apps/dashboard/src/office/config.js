@@ -110,7 +110,7 @@ export async function loadAvatarFiles() {
   try {
     const res = await fetch('/shared/avatars.json')
     AVATAR_FILES = await res.json()
-  } catch (e) {
+  } catch (_e) {
     console.error('[OfficeConfig] Failed to load avatars.json')
     AVATAR_FILES = ['avatar_0.webp']
   }

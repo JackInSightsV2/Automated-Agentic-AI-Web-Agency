@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
-import { spawn } from 'child_process'
-import { resolve } from 'path'
+import { spawn } from 'node:child_process'
+import { resolve } from 'node:path'
 
 let apiProcess = null
 
@@ -9,7 +9,7 @@ function apiControlPlugin() {
     name: 'api-control',
     configureServer(server) {
       // GET /api-control/status
-      server.middlewares.use('/api-control/status', (req, res) => {
+      server.middlewares.use('/api-control/status', (_req, res) => {
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify({ running: apiProcess !== null && !apiProcess.killed }))
       })

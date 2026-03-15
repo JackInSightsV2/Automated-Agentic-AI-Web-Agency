@@ -135,7 +135,7 @@ Style notes:
 export async function pollClosingCall(leadId: string): Promise<string | null> {
   const { data: lead } = await supabase
     .from('leads')
-    .select('closing_call_id, name, vercel_deployment_url, phone, email')
+    .select('closing_call_id, name, vercel_deployment_url, phone, email, contact_name')
     .eq('id', leadId)
     .single()
 
@@ -233,7 +233,7 @@ interface ClosingDetails {
   changes: string | null
 }
 
-function extractClosingDetails(transcripts: Array<{ user: string; text: string }>, summary: string): ClosingDetails {
+export function extractClosingDetails(transcripts: Array<{ user: string; text: string }>, summary: string): ClosingDetails {
   const fullText = transcripts
     .filter(t => t.user !== 'assistant')
     .map(t => t.text)
@@ -279,7 +279,7 @@ function extractClosingDetails(transcripts: Array<{ user: string; text: string }
   return { wantsToGoAhead, domain, needsDomain, needsEmail, ctaType, ctaValue, changes }
 }
 
-function buildJobSpec(lead: any, details: ClosingDetails, totalPrice: number): string {
+export function buildJobSpec(lead: any, details: ClosingDetails, totalPrice: number): string {
   const firstName = lead.contact_name || lead.name.split(' ')[0]
   const domainLine = details.domain
     ? `We'll get your site set up on ${details.domain}.`

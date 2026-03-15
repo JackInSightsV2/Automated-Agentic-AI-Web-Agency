@@ -38,22 +38,21 @@ export const officeRenderer = {
     // 4. Load all skins + laptop images in parallel
     const resMap = { down: 'front', up: 'back', left: 'left', right: 'right' }
     const directions = ['down', 'up', 'left', 'right']
-    const self = this
     const ts = Date.now()
 
     const promises = [loadAllOfficeSkins()]
-    directions.forEach(function (d) {
-      promises.push(new Promise(function (resolve) {
+    directions.forEach((d) => {
+      promises.push(new Promise((resolve) => {
         const img = new Image()
         img.src = '/office/objects/office_laptop_' + resMap[d] + '_close.webp?v=' + ts
-        img.onload = function () { self.laptopImages[d] = img; resolve() }
-        img.onerror = function () { resolve() }
+        img.onload = () => { this.laptopImages[d] = img; resolve() }
+        img.onerror = () => { resolve() }
       }))
-      promises.push(new Promise(function (resolve) {
+      promises.push(new Promise((resolve) => {
         const img = new Image()
         img.src = '/office/objects/office_laptop_' + resMap[d] + '_open.webp?v=' + ts
-        img.onload = function () { self.laptopOpenImages[d] = img; resolve() }
-        img.onerror = function () { resolve() }
+        img.onload = () => { this.laptopOpenImages[d] = img; resolve() }
+        img.onerror = () => { resolve() }
       }))
     })
 
@@ -82,12 +81,11 @@ export const officeRenderer = {
   },
 
   loop(now) {
-    const self = this
-    self.rafId = requestAnimationFrame(function (t) { self.loop(t) })
-    const deltaMs = Math.min(now - self.lastTime, 100)
-    self.lastTime = now
-    self.update(deltaMs)
-    self.render()
+    this.rafId = requestAnimationFrame((t) => { this.loop(t) })
+    const deltaMs = Math.min(now - this.lastTime, 100)
+    this.lastTime = now
+    this.update(deltaMs)
+    this.render()
   },
 
   update(deltaMs) {
@@ -135,10 +133,8 @@ export const officeRenderer = {
       const spot = laptopSpots[i]
       const seatId = LAPTOP_ID_MAP[i] !== undefined ? LAPTOP_ID_MAP[i] : i
 
-      const isAtDesk = chars.some(function (a) {
-        return a.deskIndex === seatId &&
-          (a.agentState === 'working' || a.agentState === 'thinking' || a.agentState === 'error')
-      })
+      const isAtDesk = chars.some((a) => a.deskIndex === seatId &&
+          (a.agentState === 'working' || a.agentState === 'thinking' || a.agentState === 'error'))
 
       const img = isAtDesk ? this.laptopOpenImages[spot.dir] : this.laptopImages[spot.dir]
       if (img) ctx.drawImage(img, spot.x, spot.y)
@@ -155,7 +151,7 @@ export const officeRenderer = {
     }
 
     // 4. Foreground
-    if (officeLayers.fgImage && officeLayers.fgImage.complete && officeLayers.fgImage.naturalWidth > 0) {
+    if (officeLayers.fgImage?.complete && officeLayers.fgImage.naturalWidth > 0) {
       ctx.drawImage(officeLayers.fgImage, 0, 0)
     }
 
@@ -210,7 +206,7 @@ export const officeRenderer = {
 
   updateEffects(deltaMs) {
     const now = performance.now()
-    this.effects = this.effects.filter(function (fx) {
+    this.effects = this.effects.filter((fx) => {
       const elapsed = now - fx.startTime
       if (elapsed > fx.duration) return false
       fx.alpha = 1 - (elapsed / fx.duration)
@@ -272,7 +268,7 @@ export const officeRenderer = {
         ctx.font = 'bold 9px "Courier New", monospace'
         ctx.textAlign = 'center'
         const chars = ['0', '1', '{', '}', ';', '>', '_']
-        const charIdx = parseInt(fx.id.slice(-1), 36) % chars.length
+        const charIdx = Number.parseInt(fx.id.slice(-1), 36) % chars.length
         ctx.fillText(chars[charIdx], 0, 0)
         ctx.shadowBlur = 4
         ctx.shadowColor = fx.color || '#fff'
