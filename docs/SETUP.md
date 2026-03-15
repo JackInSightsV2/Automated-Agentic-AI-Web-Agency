@@ -83,13 +83,7 @@ No additional setup needed -- as long as `GEMINI_API_KEY` is set, the skill work
 
 ## 9. Claude Code Skills + Plugins
 
-The system's agents spawn Claude Code as subprocesses (via the orchestrator). Some agents use Claude Code skills/slash commands inside those sessions:
-
-| Skill | Used By | Purpose |
-|-------|---------|---------|
-| `/nano-banana` | SEO Agent | Generates hero background images via Gemini |
-| `/content-marketing` | Copywriter Agent | Researches content strategy for the business |
-| `/theme-factory` | Copywriter Agent | Selects appropriate visual theme |
+The system's agents spawn Claude Code as subprocesses (via the orchestrator). The spawned sessions have access to any skills/plugins installed on the host machine. The `setup.sh` script handles all of this automatically, but here's the full breakdown.
 
 ### How it works
 The orchestrator (`packages/api/src/lib/orchestrator.ts`) spawns `claude` CLI with:
@@ -97,18 +91,56 @@ The orchestrator (`packages/api/src/lib/orchestrator.ts`) spawns `claude` CLI wi
 - `--max-turns` (varies by agent profile)
 - `--output-format json`
 
-The spawned Claude Code session has access to any skills/plugins installed on the host machine. To use all features:
+### Plugin Marketplaces
 
-1. Make sure Claude Code CLI is installed and authenticated
-2. Install any Claude Code plugins you want available (content-marketing, theme-factory, etc.)
-3. The Nano Banana skill is included in this repo at `.gemini/skills/`
+The following marketplaces must be registered before installing plugins:
 
-### Optional: Install additional Claude Code plugins
-If you use Claude Code plugins for content-marketing or theme-factory, install them via:
 ```bash
-claude plugins install <plugin-name>
+claude plugin marketplace add mksglu/context-mode
+claude plugin marketplace add anthropics/claude-plugins-official
+claude plugin marketplace add wshobson/agents
+claude plugin marketplace add composiohq/awesome-claude-plugins
+claude plugin marketplace add paddo/claude-tools
 ```
-These are optional -- the copywriter agent will still produce creative briefs without them, just with less research depth.
+
+### Plugins
+
+| Plugin | Marketplace | Purpose |
+|--------|-------------|---------|
+| `context-mode` | `mksglu/context-mode` | Context-aware mode switching |
+| `frontend-design` | `anthropics/claude-plugins-official` | Production-grade frontend interface generation |
+| `theme-factory` | `composiohq/awesome-claude-plugins` | Visual theme selection based on business type |
+| `canvas-design` | `composiohq/awesome-claude-plugins` | Canvas-based design generation |
+| `artifacts-builder` | `composiohq/awesome-claude-plugins` | Structured artifact creation |
+| `comprehensive-review` | `wshobson/agents` | In-depth code review workflows |
+| `security-scanning` | `wshobson/agents` | Security vulnerability scanning |
+| `application-performance` | `wshobson/agents` | Performance analysis and optimisation |
+| `content-marketing` | `wshobson/agents` | Content strategy research for businesses |
+| `business-analytics` | `wshobson/agents` | Business data analysis |
+| `seo-technical-optimization` | `wshobson/agents` | Technical SEO auditing and optimisation |
+
+Install all plugins:
+```bash
+claude plugin install context-mode
+claude plugin install frontend-design
+claude plugin install theme-factory
+claude plugin install canvas-design
+claude plugin install artifacts-builder
+claude plugin install comprehensive-review
+claude plugin install security-scanning
+claude plugin install application-performance
+claude plugin install content-marketing
+claude plugin install business-analytics
+claude plugin install seo-technical-optimization
+```
+
+### Standalone Skills
+
+| Skill | Location | Purpose |
+|-------|----------|---------|
+| `nano-banana` | `~/.claude/skills/nano-banana` | AI image generation via Gemini (hero images, icons, patterns) |
+
+The Nano Banana skill source is included in this repo at `.gemini/skills/nanobanana-imaging/`. The setup script copies it to `~/.claude/skills/nano-banana` automatically.
 
 ## 10. Calendly Setup
 

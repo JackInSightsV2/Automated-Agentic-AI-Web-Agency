@@ -81,14 +81,35 @@ This system runs an entire web agency autonomously:
 
 ## Quick Start
 
-1. Clone the repo
-2. Copy `.env.example` to `.env` and fill in your API keys
-3. Set up Supabase (see [docs/SETUP.md](docs/SETUP.md))
-4. Install dependencies: `bun install`
-5. Start the API: `cd packages/api && bun run src/index.ts`
-6. Start the dashboard: `cd apps/dashboard && bun run dev`
+```bash
+git clone <repo-url>
+cd Automated-Agentic-AI-Web-Agency
+chmod +x setup.sh && ./setup.sh
+```
+
+The setup script installs Bun, all dependencies, registers 5 Claude Code plugin marketplaces, installs 11 plugins + the Nano Banana standalone skill, and creates your `.env` file. After that, fill in your API keys and run `bun run dev`.
 
 See [docs/SETUP.md](docs/SETUP.md) for detailed setup instructions.
+
+### Claude Code Plugins
+
+The agency uses 11 plugins from 5 marketplaces:
+
+| Plugin | Source |
+|--------|--------|
+| `context-mode` | `mksglu/context-mode` |
+| `frontend-design` | `anthropics/claude-plugins-official` |
+| `theme-factory` | `composiohq/awesome-claude-plugins` |
+| `canvas-design` | `composiohq/awesome-claude-plugins` |
+| `artifacts-builder` | `composiohq/awesome-claude-plugins` |
+| `comprehensive-review` | `wshobson/agents` |
+| `security-scanning` | `wshobson/agents` |
+| `application-performance` | `wshobson/agents` |
+| `content-marketing` | `wshobson/agents` |
+| `business-analytics` | `wshobson/agents` |
+| `seo-technical-optimization` | `wshobson/agents` |
+
+Plus the **Nano Banana** standalone skill (included in repo) for AI image generation via Gemini.
 
 ## Documentation
 

@@ -158,31 +158,88 @@ SETTINGS_EOF
   ok "Created Claude Code project settings"
 fi
 
-# ── Install Claude Code skills/plugins ──────────────────────
+# ── Register plugin marketplaces ─────────────────────────────
 
-header "Installing Claude Code skills & plugins"
+header "Registering Claude Code plugin marketplaces"
 
-# Install available Claude Code plugins
-# These are optional but enhance agent capabilities
-PLUGINS=("content-marketing" "theme-factory")
+MARKETPLACES=(
+  "mksglu/context-mode"
+  "anthropics/claude-plugins-official"
+  "wshobson/agents"
+  "composiohq/awesome-claude-plugins"
+  "paddo/claude-tools"
+)
+
+for repo in "${MARKETPLACES[@]}"; do
+  info "Registering marketplace: ${BOLD}$repo${NC}"
+  if claude plugin marketplace add "$repo" 2>/dev/null; then
+    ok "Registered: $repo"
+  else
+    warn "Could not register: $repo (may already exist)"
+  fi
+done
+
+# ── Install Claude Code plugins ──────────────────────────────
+
+header "Installing Claude Code plugins"
+
+# All plugins used by the agency's agents
+PLUGINS=(
+  # From context-mode (mksglu/context-mode)
+  "context-mode"
+  # From claude-plugins-official (anthropics/claude-plugins-official)
+  "frontend-design"
+  # From awesome-claude-plugins (composiohq/awesome-claude-plugins)
+  "theme-factory"
+  "canvas-design"
+  "artifacts-builder"
+  # From claude-code-workflows (wshobson/agents)
+  "comprehensive-review"
+  "security-scanning"
+  "application-performance"
+  "content-marketing"
+  "business-analytics"
+  "seo-technical-optimization"
+)
+
 INSTALLED_PLUGINS=0
 FAILED_PLUGINS=()
 
 for plugin in "${PLUGINS[@]}"; do
-  info "Attempting to install Claude Code plugin: ${BOLD}$plugin${NC}"
-  if claude plugins install "$plugin" 2>/dev/null; then
+  info "Installing plugin: ${BOLD}$plugin${NC}"
+  if claude plugin install "$plugin" 2>/dev/null; then
     ok "Installed: $plugin"
     INSTALLED_PLUGINS=$((INSTALLED_PLUGINS + 1))
   else
-    warn "Could not install plugin: $plugin (may not be available — this is optional)"
+    warn "Could not install: $plugin"
     FAILED_PLUGINS+=("$plugin")
   fi
 done
 
+echo ""
 if [ "$INSTALLED_PLUGINS" -gt 0 ]; then
-  ok "Installed $INSTALLED_PLUGINS Claude Code plugin(s)"
+  ok "Installed $INSTALLED_PLUGINS / ${#PLUGINS[@]} Claude Code plugin(s)"
+fi
+if [ ${#FAILED_PLUGINS[@]} -gt 0 ]; then
+  warn "${#FAILED_PLUGINS[@]} plugin(s) failed — see summary below"
+fi
+
+# ── Install standalone skills ────────────────────────────────
+
+header "Installing standalone Claude Code skills"
+
+NANO_BANANA_DEST="$HOME/.claude/skills/nano-banana"
+NANO_BANANA_SRC="$PROJECT_ROOT/.gemini/skills/nanobanana-imaging/SKILL.md"
+
+if [ -d "$NANO_BANANA_DEST" ]; then
+  ok "nano-banana skill already installed at ~/.claude/skills/nano-banana"
+elif [ -f "$NANO_BANANA_SRC" ]; then
+  mkdir -p "$NANO_BANANA_DEST"
+  cp "$NANO_BANANA_SRC" "$NANO_BANANA_DEST/SKILL.md"
+  ok "Installed nano-banana skill to ~/.claude/skills/nano-banana"
 else
-  warn "No Claude Code plugins were installed (this is fine — they're optional)"
+  warn "nano-banana source not found in repo — skipping"
+  FAILED_PLUGINS+=("nano-banana (standalone skill)")
 fi
 
 # ── Verify Gemini Nano Banana skill ─────────────────────────
@@ -244,7 +301,7 @@ fi
 if [ ${#FAILED_PLUGINS[@]} -gt 0 ]; then
   printf "  ${YELLOW}${STEP}.${NC} ${BOLD}Failed plugins${NC} (optional — install manually if needed):\n"
   for fp in "${FAILED_PLUGINS[@]}"; do
-    printf "     ${RED}•${NC} $fp  →  ${CYAN}claude plugins install $fp${NC}\n"
+    printf "     ${RED}•${NC} $fp  →  ${CYAN}claude plugin install $fp${NC}\n"
   done
   echo ""
   STEP=$((STEP + 1))
