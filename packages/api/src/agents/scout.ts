@@ -93,7 +93,7 @@ export async function runScoutAgent(query: string, pipelineRunId: string, limit 
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Goog-Api-Key': process.env.GOOGLE_MAPS_API_KEY!,
+      'X-Goog-Api-Key': process.env.GOOGLE_PLACES_API_KEY!,
       'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.types'
     },
     body: JSON.stringify({
