@@ -92,7 +92,7 @@ Three MCP servers give Claude Code direct access to manage services during setup
 ## Quick Start
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/JackInSightsV2/Automated-Agentic-AI-Web-Agency.git
 cd Automated-Agentic-AI-Web-Agency
 chmod +x setup.sh && ./setup.sh
 ```

@@ -59,7 +59,7 @@ if command -v gemini &>/dev/null; then
   ok "Gemini CLI found: $(command -v gemini)"
 else
   fail "Gemini CLI not found."
-  info "Install it: npm install -g @anthropic-ai/gemini-cli"
+  info "Install it: npm install -g @google/gemini-cli"
   info "Or see: https://github.com/google-gemini/gemini-cli"
   MISSING=1
 fi
