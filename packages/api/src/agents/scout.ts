@@ -88,12 +88,18 @@ export async function runScoutAgent(query: string, pipelineRunId: string, limit 
 
   await agentLog('scout', `Searching: ${query}`, { runId: pipelineRunId })
 
+  // .env.example documents GOOGLE_PLACES_API_KEY; GOOGLE_MAPS_API_KEY kept for existing setups
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_MAPS_API_KEY
+  if (!apiKey) {
+    throw new Error('GOOGLE_PLACES_API_KEY is not set (or set MOCK_SCOUT=true to use mock data)')
+  }
+
   // Use Places API (New) — Text Search
   const searchRes = await fetch('https://places.googleapis.com/v1/places:searchText', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Goog-Api-Key': process.env.GOOGLE_MAPS_API_KEY!,
+      'X-Goog-Api-Key': apiKey,
       'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.rating,places.userRatingCount,places.types'
     },
     body: JSON.stringify({

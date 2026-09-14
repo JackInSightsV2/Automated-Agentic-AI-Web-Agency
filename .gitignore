@@ -56,3 +56,6 @@ coverage/
 .nyc_output/
 htmlcov/
 .coverage
+
+# Local agent instructions
+CLAUDE.md
