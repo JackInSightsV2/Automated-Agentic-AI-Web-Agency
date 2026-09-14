@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
-import { fetchWithRetry } from '../lib/fetch-retry'
+import { startCall } from '../lib/bland'
 import { agency, pricing, getCallPhone } from '../lib/config'
 
 export async function runFollowupCallAgent(leadId: string): Promise<void> {
@@ -67,42 +67,24 @@ CRITICAL RULES:
 
   await agentLog('followup', `Follow-up call to ${lead.name} (${lead.phone})`, { leadId })
 
-  const apiKey = process.env.BLAND_AI_API_KEY
-  if (!apiKey) throw new Error('BLAND_AI_API_KEY must be set')
-
-  const res = await fetchWithRetry('https://api.bland.ai/v1/calls', {
-    method: 'POST',
-    headers: {
-      Authorization: apiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      phone_number: phone,
-      task,
-      voice: 'nat',
-      language: 'en-GB',
-      max_duration: 5,
-      wait_for_greeting: false,
-      record: true,
-      interruption_threshold: 200,
-      voicemail_action: 'leave_message',
-      noise_cancellation: true,
-      metadata: { lead_id: leadId, type: 'followup' }
-    })
+  const callId = await startCall({
+    phone_number: phone,
+    task,
+    max_duration: 5,
+    wait_for_greeting: false,
+    interruption_threshold: 200,
+    voicemail_action: 'leave_message',
+    metadata: { lead_id: leadId, type: 'followup' },
   })
-
-  const data = await res.json() as { call_id?: string }
-
-  if (!data.call_id) throw new Error(`Bland follow-up call failed: ${JSON.stringify(data)}`)
 
   await supabase
     .from('leads')
     .update({
-      followup_call_id: data.call_id,
+      followup_call_id: callId,
       status: 'followed_up',
       status_updated_at: new Date().toISOString()
     })
     .eq('id', leadId)
 
-  await agentLog('followup', `Follow-up call initiated: ${data.call_id}`, { leadId, level: 'success' })
+  await agentLog('followup', `Follow-up call initiated: ${callId}`, { leadId, level: 'success' })
 }

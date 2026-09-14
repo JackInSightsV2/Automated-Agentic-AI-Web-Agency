@@ -107,6 +107,9 @@ export interface AgentLog {
 
 export type QueueName = 'verify' | 'copywrite' | 'build' | 'seo' | 'review' | 'deploy' | 'call' | 'followup' | 'close'
 
+/** Every queue, in pipeline order. Single source of truth for pause/resume, stats, and defaults. */
+export const QUEUE_NAMES: readonly QueueName[] = ['verify', 'copywrite', 'build', 'seo', 'review', 'deploy', 'call', 'followup', 'close'] as const
+
 export type QueueItemStatus = 'pending' | 'pending_approval' | 'approved' | 'processing' | 'completed' | 'failed'
 
 export interface QueueItem {

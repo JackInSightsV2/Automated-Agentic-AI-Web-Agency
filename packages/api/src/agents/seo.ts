@@ -1,6 +1,8 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
+import { leadSlug } from '../lib/slug'
+import { SITE_URL_PLACEHOLDER } from './deployer'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync } from 'node:fs'
 import { join, sep } from 'node:path'
@@ -24,7 +26,7 @@ export async function runSeoAgent(leadId: string): Promise<void> {
 
   if (!lead) throw new Error(`Lead ${leadId} not found`)
 
-  const slug = lead.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '').slice(0, 40)
+  const slug = leadSlug(lead.name)
   const previewPath = join(PREVIEW_DIR, slug)
 
   if (!existsSync(previewPath)) {
@@ -49,6 +51,10 @@ export async function runSeoAgent(leadId: string): Promise<void> {
     } catch { /* ignore parse errors */ }
   }
 
+  // The final hostname is only known at deploy time; the deployer replaces this
+  // placeholder in every text file before building.
+  const siteUrl = `https://${SITE_URL_PLACEHOLDER}/`
+
   const prompt = `You are an expert SEO specialist. Optimize this existing website for search engines AND generate a hero background image.
 
 Business Details:
@@ -59,6 +65,9 @@ Business Details:
 ${seoKeywords}
 
 The website files are in the current directory. This is a Vite project.
+
+The site's public URL is not known yet. Wherever a URL for the site itself is needed, write EXACTLY this placeholder and nothing else: ${siteUrl}
+It will be replaced with the real address automatically at deploy time. Do NOT invent a domain.
 
 ## STEP 1: Generate hero image
 
@@ -80,31 +89,31 @@ Perform ALL of the following SEO optimizations:
    - Descriptive <title> with business name, category, and location
    - <meta name="description"> (150-160 chars, compelling)
    - <meta name="keywords"> with relevant local SEO terms
-   - Canonical URL: <link rel="canonical" href="https://${slug}.vercel.app/">
+   - Canonical URL: <link rel="canonical" href="${siteUrl}">
 
 2. **Open Graph tags** in index.html:
-   - og:title, og:description, og:type (website), og:url, og:locale
+   - og:title, og:description, og:type (website), og:url (${siteUrl}), og:locale
 
 3. **LocalBusiness JSON-LD** structured data in index.html:
    <script type="application/ld+json">
    {
      "@context": "https://schema.org",
      "@type": "LocalBusiness",
-     "name": "${lead.name}",
-     "address": { "@type": "PostalAddress", "streetAddress": "${lead.address}" },
-     ${lead.phone ? `"telephone": "${lead.phone}",` : ''}
+     "name": ${JSON.stringify(lead.name)},
+     "address": { "@type": "PostalAddress", "streetAddress": ${JSON.stringify(lead.address || '')} },
+     ${lead.phone ? `"telephone": ${JSON.stringify(lead.phone)},` : ''}
      ${lead.google_rating ? `"aggregateRating": { "@type": "AggregateRating", "ratingValue": "${lead.google_rating}", "reviewCount": "${lead.google_review_count}" },` : ''}
-     "url": "https://${slug}.vercel.app/"
+     "url": "${siteUrl}"
    }
    </script>
 
 4. **Semantic HTML**: Ensure proper heading hierarchy (h1 → h2 → h3), alt attributes on any images, aria-labels on interactive elements
 
-5. **Create sitemap.xml** in the project root (public/ directory if it exists, otherwise root):
-   Simple XML sitemap with the homepage URL
+5. **Create public/sitemap.xml**:
+   Simple XML sitemap with the single homepage URL ${siteUrl}
 
-6. **Create robots.txt** in the project root (public/ directory if it exists, otherwise root):
-   Allow all crawlers, reference sitemap
+6. **Create public/robots.txt**:
+   Allow all crawlers, reference the sitemap at ${siteUrl}sitemap.xml
 
 7. **Performance**: Add loading="lazy" to any images, ensure CSS is optimized
 

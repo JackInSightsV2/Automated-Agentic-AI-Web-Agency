@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
+import { leadSlug } from '../lib/slug'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync } from 'node:fs'
 import { join, sep } from 'node:path'
@@ -24,7 +25,7 @@ export async function runCodeReviewerAgent(leadId: string): Promise<boolean> {
 
   if (!lead) throw new Error(`Lead ${leadId} not found`)
 
-  const slug = lead.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '').slice(0, 40)
+  const slug = leadSlug(lead.name)
   const previewPath = join(PREVIEW_DIR, slug)
 
   if (!existsSync(previewPath)) {
@@ -121,10 +122,13 @@ Do NOT modify any site files — this is a read-only review.`
   })
 
   if (passed) {
+    // Clear any earlier "Review score ..." error: the builder treats a lingering
+    // one as a review-retry and would "fix" stale feedback on the next build.
     await supabase.from('leads').update({
       status: 'reviewed',
       status_updated_at: new Date().toISOString(),
-      review_result: reviewSummary
+      review_result: reviewSummary,
+      error: null
     }).eq('id', leadId)
 
     await agentLog('reviewer', `${lead.name} PASSED review (score: ${review.overall_score})`, {

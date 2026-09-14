@@ -3,6 +3,7 @@ import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
 import { enqueue } from '../lib/queue'
 import { runJob } from '../lib/orchestrator'
+import { leadSlug } from '../lib/slug'
 import { existsSync, cpSync } from 'node:fs'
 import { join, sep } from 'node:path'
 
@@ -25,7 +26,7 @@ export async function applyDeliveryChanges(leadId: string): Promise<boolean> {
     return false
   }
 
-  const slug = lead.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '')
+  const slug = leadSlug(lead.name)
   const previewDir = join(process.cwd(), 'preview', slug)
 
   if (!existsSync(previewDir)) {

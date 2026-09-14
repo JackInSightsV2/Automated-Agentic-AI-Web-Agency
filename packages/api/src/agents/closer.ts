@@ -2,9 +2,23 @@ import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
 import { sendClientMessage } from '../lib/twilio'
-import { fetchWithRetry } from '../lib/fetch-retry'
+import { startCall, getCall, isCallFinished, isCallFailed } from '../lib/bland'
 import { createCheckoutLink } from '../lib/stripe'
 import { agency, pricing, getCallPhone } from '../lib/config'
+
+/** Structured fields we ask Bland to extract after the closing call (see lib/bland.ts). */
+const CLOSING_ANALYSIS_SCHEMA = {
+  wants_to_go_ahead: 'true only if the customer clearly agreed to buy the website; false if undecided, wants to think about it, or declined',
+  domain_name: 'Domain name the customer already owns (e.g. example.co.uk), or null',
+  needs_domain_registration: 'true if the customer has no domain and wants us to register one',
+  needs_email_setup: 'true if the customer wants a professional email address set up',
+  cta_type: 'How customers should contact them on the site: "phone" or "email_form", or null',
+  cta_value: 'The phone number or email address for the CTA, or null',
+  requested_changes: 'Any changes the customer asked for on the website, as a short sentence, or null',
+}
+
+/** A closing call that has not completed after this long is treated as unanswered. */
+export const CLOSING_CALL_TIMEOUT_MS = 45 * 60 * 1000
 
 export async function runCloserAgent(leadId: string): Promise<void> {
   const { data: lead } = await supabase
@@ -27,6 +41,7 @@ export async function runCloserAgent(leadId: string): Promise<void> {
   await agentLog('closer', `Initiating closing call to: ${lead.name}${contactName ? ` (${contactName})` : ''} (${phone})`, { leadId })
 
   const suggestedDomain = lead.name.toLowerCase().replace(/[^a-z0-9]/g, '') + agency.defaultTld
+  const calendly = process.env.CALENDLY_LINK || 'a booking link we will text over'
 
   const task = `You are ${agency.callerName} from ${agency.name}, a web design studio in London. You're making a follow-up call to ${lead.name}${contactName ? ` — you spoke to ${contactName} last time` : ''} who booked a call after seeing the website you built for them. Be warm, friendly, and professional — like chatting with a neighbour who's interested in your services.
 
@@ -69,7 +84,7 @@ Brilliant, thanks so much for your time${contactName ? ` ${contactName}` : ''}! 
 "Hi there, it's ${agency.callerName} from ${agency.name}! We had a call booked to chat about the website we built for ${lead.name}. No worries — I'll drop you a message with all the details. If you'd like to rebook, there's a link in there too. Have a lovely day!"
 
 INFORMATION YOU MUST COLLECT (ask naturally, don't interrogate):
-- Do they want to go ahead? (yes/no/thinking about it)
+- Do they want to go ahead? (yes/no/thinking about it) — ask this explicitly before wrapping up
 - Domain name: do they have one, or need us to register one?
 - CTA preference: phone number or email contact form?
 - CTA value: the phone number or email address
@@ -82,7 +97,7 @@ Business context:
 - Website we built: ${lead.vercel_deployment_url}
 - Pricing: £${pricing.setup} setup + £${pricing.monthly}/month
 - Domain + email setup: extra £${pricing.domain}
-- Booking link: ${process.env.CALENDLY_LINK}
+- Booking link: ${calendly}
 ${lead.google_rating ? `- Their Google rating: ${lead.google_rating}/5 (${lead.google_review_count} reviews)` : ''}
 
 Style notes:
@@ -93,134 +108,153 @@ Style notes:
 - Repeat back important details (domain names, phone numbers, emails)
 - Aim for 3-5 minutes`
 
-  const apiKey = process.env.BLAND_AI_API_KEY
-  if (!apiKey) throw new Error('BLAND_AI_API_KEY must be set')
-
-  const res = await fetchWithRetry('https://api.bland.ai/v1/calls', {
-    method: 'POST',
-    headers: {
-      Authorization: apiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      phone_number: phone,
-      task,
-      voice: 'nat',
-      language: 'en-GB',
-      max_duration: 8,
-      wait_for_greeting: true,
-      record: true,
-      interruption_threshold: 500,
-      metadata: { lead_id: leadId, call_type: 'closing' }
-    })
+  const callId = await startCall({
+    phone_number: phone,
+    task,
+    max_duration: 8,
+    wait_for_greeting: true,
+    interruption_threshold: 500,
+    analysis_schema: CLOSING_ANALYSIS_SCHEMA,
+    metadata: { lead_id: leadId, call_type: 'closing' },
   })
-
-  const data = await res.json() as { call_id?: string }
-
-  if (!data.call_id) throw new Error(`Bland closing call failed: ${JSON.stringify(data)}`)
 
   await supabase
     .from('leads')
     .update({
-      closing_call_id: data.call_id,
+      closing_call_id: callId,
       closing_call_at: new Date().toISOString(),
+      closing_summary: null,
       status: 'closing_call',
       status_updated_at: new Date().toISOString()
     })
     .eq('id', leadId)
 
-  await agentLog('closer', `Closing call initiated: ${data.call_id}`, { leadId, level: 'success' })
+  await agentLog('closer', `Closing call initiated: ${callId}`, { leadId, level: 'success' })
 }
 
-export async function pollClosingCall(leadId: string): Promise<string | null> {
+/**
+ * Check whether the closing call has finished and, if so, record what was
+ * agreed, generate the payment link, and text the job spec to the customer.
+ *
+ * Idempotent: the lead is moved out of `closing_call` with a conditional
+ * update BEFORE any message is sent, so a second poller (cron, manual
+ * /closing/poll, or the script) can never send a second SMS or create a
+ * second Stripe session.
+ */
+export async function pollClosingCall(leadId: string): Promise<'going_ahead' | 'undecided' | 'no_answer' | null> {
   const { data: lead } = await supabase
     .from('leads')
-    .select('closing_call_id, name, vercel_deployment_url, phone, email, contact_name')
+    .select('closing_call_id, closing_call_at, name, status, vercel_deployment_url, phone, email, contact_name')
     .eq('id', leadId)
     .single()
 
   if (!lead?.closing_call_id) return null
+  if (lead.status !== 'closing_call') return null // Already processed (or never started)
+  if (!process.env.BLAND_AI_API_KEY) return null
 
-  const apiKey = process.env.BLAND_AI_API_KEY
-  if (!apiKey) return null
+  const call = await getCall(lead.closing_call_id)
 
-  const res = await fetchWithRetry(`https://api.bland.ai/v1/calls/${lead.closing_call_id}`, {
-    headers: { Authorization: apiKey }
+  const startedAt = lead.closing_call_at ? new Date(lead.closing_call_at).getTime() : Date.now()
+  const timedOut = Date.now() - startedAt > CLOSING_CALL_TIMEOUT_MS
+
+  if (!isCallFinished(call) && !isCallFailed(call) && !timedOut) return null
+
+  // Call never completed: hand back to the human rather than guessing.
+  if (!isCallFinished(call)) {
+    const { data: updated } = await supabase
+      .from('leads')
+      .update({
+        closing_summary: `Closing call did not complete (Bland status: ${call.status || 'unknown'}${timedOut ? ', timed out' : ''})`,
+        status: 'hitl_ready',
+        status_updated_at: new Date().toISOString(),
+      })
+      .eq('id', leadId)
+      .eq('status', 'closing_call')
+      .select('id')
+      .single()
+    if (!updated) return null
+
+    await agentLog('closer', `Closing call for ${lead.name} did not complete → hitl_ready`, { leadId, level: 'warn' })
+    await notify(`Closing call with *${lead.name}* did not complete. Rebook or call manually.`).catch(() => {})
+    return 'no_answer'
+  }
+
+  const details = extractClosingDetails(call.transcripts || [], call.summary || '', call.analysis)
+  const totalPrice = pricing.setup + (details.needsDomain ? pricing.domain : 0)
+
+  const updateData: Record<string, unknown> = {
+    closing_summary: call.summary || '(no summary)',
+    status_updated_at: new Date().toISOString(),
+    total_price: totalPrice,
+    status: details.wantsToGoAhead ? 'spec_sent' : 'hitl_ready',
+  }
+  if (details.domain) updateData.desired_domain = details.domain
+  if (details.needsDomain) updateData.needs_domain = true
+  if (details.needsEmail) updateData.needs_email_setup = true
+  if (details.ctaType) updateData.cta_type = details.ctaType
+  if (details.ctaValue) updateData.cta_value = details.ctaValue
+  if (details.changes) updateData.requested_changes = details.changes
+
+  // Payment link before the write so it can be stored atomically with the status change
+  let paymentUrl: string | null = null
+  if (details.wantsToGoAhead) {
+    try {
+      paymentUrl = await createCheckoutLink(leadId, lead.name, details.needsDomain)
+      updateData.stripe_payment_link = paymentUrl
+    } catch (err) {
+      await agentLog('closer', `Stripe link failed: ${String(err)}`, { leadId, level: 'warn' })
+    }
+  }
+
+  // Claim the transition. If another poller already did, stop here — no messages.
+  const { data: updated } = await supabase
+    .from('leads')
+    .update(updateData)
+    .eq('id', leadId)
+    .eq('status', 'closing_call')
+    .select('id')
+    .single()
+
+  if (!updated) return null
+
+  await agentLog('closer', `Closing call complete for ${lead.name}: ${details.wantsToGoAhead ? 'GOING AHEAD' : 'not yet decided'}`, {
+    leadId,
+    level: 'success',
+    metadata: { summary: call.summary, analysis: call.analysis, details }
   })
-  const call = await res.json() as {
-    status?: string
-    summary?: string
-    transcripts?: Array<{ user: string; text: string }>
+
+  if (!details.wantsToGoAhead) {
+    await notify(
+      `*Closing call complete: ${lead.name}*\n\n` +
+      `Not a clear yes — marked hitl_ready for you to follow up.\n\n` +
+      `${(call.summary || '').slice(0, 400)}`
+    ).catch(() => {})
+    return 'undecided'
   }
 
-  if (call.status === 'completed') {
-    const details = extractClosingDetails(call.transcripts || [], call.summary || '')
-
-    const totalPrice = pricing.setup + (details.needsDomain ? pricing.domain : 0)
-
-    const updateData: Record<string, unknown> = {
-      closing_summary: call.summary,
-      status_updated_at: new Date().toISOString(),
-      total_price: totalPrice
+  // Send friendly summary + payment link to client via Twilio SMS/WhatsApp
+  const spec = buildJobSpec({ ...lead, stripe_payment_link: paymentUrl }, details, totalPrice)
+  if (lead.phone) {
+    try {
+      await sendClientMessage({ phone: lead.phone, message: spec, leadId })
+      await agentLog('closer', `Job spec sent to client via Twilio`, { leadId, level: 'success' })
+    } catch (err) {
+      await agentLog('closer', `Failed to send spec via Twilio: ${String(err)}`, { leadId, level: 'warn' })
     }
-
-    if (details.domain) updateData.desired_domain = details.domain
-    if (details.needsDomain) updateData.needs_domain = true
-    if (details.needsEmail) updateData.needs_email_setup = true
-    if (details.ctaType) updateData.cta_type = details.ctaType
-    if (details.ctaValue) updateData.cta_value = details.ctaValue
-    if (details.changes) updateData.requested_changes = details.changes
-
-    if (details.wantsToGoAhead) {
-      updateData.status = 'spec_sent'
-
-      // Generate Stripe payment link
-      try {
-        const paymentUrl = await createCheckoutLink(leadId, lead.name, details.needsDomain)
-        updateData.stripe_payment_link = paymentUrl
-        ;(lead as any).stripe_payment_link = paymentUrl
-      } catch (err) {
-        await agentLog('closer', `Stripe link failed: ${String(err)}`, { leadId, level: 'warn' })
-      }
-
-      // Send friendly summary + payment link to client via Twilio SMS/WhatsApp
-      const spec = buildJobSpec(lead, details, totalPrice)
-      if (lead.phone) {
-        try {
-          await sendClientMessage({ phone: lead.phone, message: spec, leadId })
-          await agentLog('closer', `Job spec sent to client via Twilio`, { leadId, level: 'success' })
-        } catch (err) {
-          await agentLog('closer', `Failed to send spec via Twilio: ${String(err)}`, { leadId, level: 'warn' })
-        }
-      }
-
-      // Notify admin via Telegram
-      const contactName = lead.contact_name || lead.name.split(' ')[0]
-      await notify(
-        `*Closing call complete: ${lead.name}*\n\n` +
-        `${contactName} wants to go ahead!\n` +
-        `Total: £${totalPrice}\n` +
-        `Domain: ${details.domain || (details.needsDomain ? 'needs registration' : 'N/A')}\n` +
-        `CTA: ${details.ctaType || 'N/A'} → ${details.ctaValue || 'N/A'}\n` +
-        `Changes: ${details.changes || 'none'}\n\n` +
-        `Job spec + payment link sent to client via SMS/WhatsApp.`
-      )
-    } else {
-      updateData.status = 'hitl_ready'
-    }
-
-    await supabase.from('leads').update(updateData).eq('id', leadId)
-
-    await agentLog('closer', `Closing call complete for ${lead.name}: ${details.wantsToGoAhead ? 'GOING AHEAD' : 'not yet decided'}`, {
-      leadId,
-      level: 'success',
-      metadata: { summary: call.summary, details }
-    })
-
-    return details.wantsToGoAhead ? 'going_ahead' : 'undecided'
   }
 
-  return null
+  const contactName = lead.contact_name || lead.name.split(' ')[0]
+  await notify(
+    `*Closing call complete: ${lead.name}*\n\n` +
+    `${contactName} wants to go ahead!\n` +
+    `Total: £${totalPrice}\n` +
+    `Domain: ${details.domain || (details.needsDomain ? 'needs registration' : 'N/A')}\n` +
+    `CTA: ${details.ctaType || 'N/A'} → ${details.ctaValue || 'N/A'}\n` +
+    `Changes: ${details.changes || 'none'}\n\n` +
+    `Job spec + payment link sent to client via SMS/WhatsApp.`
+  ).catch(() => {})
+
+  return 'going_ahead'
 }
 
 interface ClosingDetails {
@@ -233,47 +267,78 @@ interface ClosingDetails {
   changes: string | null
 }
 
-export function extractClosingDetails(transcripts: Array<{ user: string; text: string }>, summary: string): ClosingDetails {
-  const fullText = transcripts
+// Explicit commitment phrases only. Bare "yes", "perfect", "brilliant" are not
+// enough: the customer says "yes" to "is that Sarah?" and the AI says "brilliant"
+// in every call. Customer transcript and Bland's summary are checked separately.
+const CUSTOMER_COMMITS = /\b(go ahead|let'?s do (it|that|this)|sign me up|sounds good|sounds great|i'?m in|we'?re in|happy to (go ahead|proceed|do that)|let'?s get (it |that )?(started|going|sorted)|yes,? (please|let'?s|go|do it)|count me in|get it (set up|sorted|live))\b/
+const SUMMARY_COMMITS = /\b(agreed to (proceed|go ahead|buy|purchase|sign up)|wants? to (go ahead|proceed|move forward)|decided to (go ahead|proceed)|(is|are) going ahead|will (go ahead|proceed)|confirmed (that )?(they|he|she) (want|would like)|ready to (proceed|go ahead|pay)|happy to proceed)\b/
+const HESITATIONS = /\b(not sure|maybe|think about|thinking about|not yet|not right now|no thanks|no thank you|not interested|can'?t afford|too expensive|call (me |us )?back|get back to (you|us)|speak to (my|the) (partner|wife|husband|boss|accountant)|decline|not ready|undecided|voicemail|did not answer|no answer)\b/
+
+export function extractClosingDetails(
+  transcripts: Array<{ user: string; text: string }>,
+  summary: string,
+  analysis?: Record<string, unknown> | null,
+): ClosingDetails {
+  const customerText = transcripts
     .filter(t => t.user !== 'assistant')
     .map(t => t.text)
     .join(' ')
     .toLowerCase()
 
-  const allText = (fullText + ' ' + summary).toLowerCase()
+  const summaryText = summary.toLowerCase()
+  const allText = `${customerText} ${summaryText}`
 
-  // Check if going ahead
-  const wantsToGoAhead = /yes|go ahead|let'?s do it|sounds good|sign me up|perfect|brilliant/.test(allText) &&
-    !/not sure|maybe|think about|not yet|no thanks/.test(allText)
+  const a = analysis || {}
+  const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'null' ? v.trim() : null)
+  const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : null)
+
+  // Going ahead: structured answer wins; otherwise explicit commitment with no hesitation
+  const structuredGoAhead = bool(a.wants_to_go_ahead)
+  const wantsToGoAhead = structuredGoAhead !== null
+    ? structuredGoAhead
+    : (CUSTOMER_COMMITS.test(customerText) || SUMMARY_COMMITS.test(summaryText)) && !HESITATIONS.test(allText)
 
   // Domain detection
-  const domainMatch = fullText.match(/([a-z0-9-]+\.(co\.uk|com|org|net|uk))/i)
-  const domain = domainMatch ? domainMatch[0] : null
-  const needsDomain = /don'?t have|no domain|need a domain|register|sort that out/.test(allText) && !domain
+  const structuredDomain = str(a.domain_name)
+  const domainMatch = customerText.match(/([a-z0-9-]+\.(co\.uk|com|org|net|uk))/i)
+  const domain = structuredDomain && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(structuredDomain)
+    ? structuredDomain.toLowerCase()
+    : domainMatch ? domainMatch[0] : null
+  const needsDomain = bool(a.needs_domain_registration)
+    ?? (/don'?t have|no domain|need a domain|register|sort that out/.test(allText) && !domain)
 
   // Email setup
-  const needsEmail = needsDomain && /email|hello@|professional email/.test(allText)
+  const needsEmail = bool(a.needs_email_setup) ?? (needsDomain && /email|hello@|professional email/.test(allText))
 
   // CTA type
   let ctaType: 'phone' | 'email_form' | null = null
-  if (/phone|call|ring|tap to call/.test(allText)) ctaType = 'phone'
-  if (/form|email|fill in|contact form/.test(allText)) ctaType = 'email_form'
+  const structuredCta = str(a.cta_type)?.toLowerCase()
+  if (structuredCta === 'phone' || structuredCta === 'email_form') {
+    ctaType = structuredCta
+  } else {
+    if (/phone|call|ring|tap to call/.test(allText)) ctaType = 'phone'
+    if (/form|email|fill in|contact form/.test(allText)) ctaType = 'email_form'
+  }
 
   // CTA value - look for phone numbers or emails
-  let ctaValue: string | null = null
-  const phoneMatch = fullText.match(/\+?[\d\s]{10,}/)
-  const emailMatch = fullText.match(/[\w.-]+@[\w.-]+\.\w{2,}/)
-  if (ctaType === 'phone' && phoneMatch) ctaValue = phoneMatch[0].trim()
-  if (ctaType === 'email_form' && emailMatch) ctaValue = emailMatch[0]
+  let ctaValue: string | null = str(a.cta_value)
+  if (!ctaValue) {
+    const phoneMatch = customerText.match(/\+?[\d\s]{10,}/)
+    const emailMatch = customerText.match(/[\w.-]+@[\w.-]+\.\w{2,}/)
+    if (ctaType === 'phone' && phoneMatch) ctaValue = phoneMatch[0].trim()
+    if (ctaType === 'email_form' && emailMatch) ctaValue = emailMatch[0]
+  }
 
   // Changes
-  const changeIndicators = /change|update|different|replace|swap|modify|add|remove/
-  let changes: string | null = null
-  if (changeIndicators.test(allText)) {
-    // Extract the sentences around change requests from summary
-    const summaryLines = summary.split('.')
-    const changeLines = summaryLines.filter(l => changeIndicators.test(l.toLowerCase()))
-    if (changeLines.length) changes = changeLines.join('. ').trim()
+  let changes: string | null = str(a.requested_changes)
+  if (!changes) {
+    const changeIndicators = /change|update|different|replace|swap|modify|add|remove/
+    if (changeIndicators.test(allText)) {
+      // Extract the sentences around change requests from summary
+      const summaryLines = summary.split('.')
+      const changeLines = summaryLines.filter(l => changeIndicators.test(l.toLowerCase()))
+      if (changeLines.length) changes = changeLines.join('. ').trim()
+    }
   }
 
   return { wantsToGoAhead, domain, needsDomain, needsEmail, ctaType, ctaValue, changes }

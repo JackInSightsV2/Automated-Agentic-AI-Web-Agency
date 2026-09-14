@@ -49,12 +49,18 @@ export async function handleVerify(item: QueueItem): Promise<void> {
 export async function handleBuild(item: QueueItem): Promise<void> {
   const lead = await getLead(item.lead_id)
   assertStatus(lead, ['briefed', 'building'], 'Build')
-  await agentLog('builder', `Building website for "${lead.name}" (${lead.category})`, { leadId: item.lead_id })
 
-  await runBuilderAgent(item.lead_id)
-
-  // If this is a change request, skip SEO + review and go straight to deploy
   if (lead.skip_to_deploy) {
+    // Change request from the dashboard: edit the existing site in place using
+    // lead.requested_changes (the builder agent would rebuild from scratch and
+    // ignore the requested changes), then go straight to deploy.
+    await agentLog('builder', `Applying requested changes to "${lead.name}"`, { leadId: item.lead_id })
+    const { applyDeliveryChanges } = await import('../agents/delivery')
+    const applied = await applyDeliveryChanges(item.lead_id)
+    if (!applied) {
+      throw new Error(`Build handler: could not apply requested changes for "${lead.name}" (see delivery logs)`)
+    }
+
     await supabase.from('leads').update({
       skip_to_deploy: false,
       requested_changes: null,
@@ -69,6 +75,9 @@ export async function handleBuild(item: QueueItem): Promise<void> {
     })
     await agentLog('builder', `"${lead.name}" changes applied → queued for deploy (skipping SEO/review)`, { leadId: item.lead_id, level: 'success' })
   } else {
+    await agentLog('builder', `Building website for "${lead.name}" (${lead.category})`, { leadId: item.lead_id })
+    await runBuilderAgent(item.lead_id)
+
     await enqueue({
       leadId: item.lead_id,
       queueName: 'seo',
@@ -157,6 +166,20 @@ export async function handleDeploy(item: QueueItem): Promise<void> {
     return
   }
 
+  // Redeploy of a site that has already gone out (e.g. a tweak requested from the
+  // dashboard while the call is pending): don't email again or queue a second call.
+  const { data: priorCall } = await supabase
+    .from('queue_items')
+    .select('id')
+    .eq('lead_id', item.lead_id)
+    .eq('queue_name', 'call')
+    .limit(1)
+
+  if (priorCall && priorCall.length > 0) {
+    await agentLog('deployer', `"${lead.name}" redeployed at ${updatedLead.vercel_deployment_url} — outreach already in progress, not re-queuing call`, { leadId: item.lead_id, level: 'success' })
+    return
+  }
+
   // Standard (non-delivery) deploy: send email if available, queue call
   if (updatedLead?.email) {
     await agentLog('deployer', `"${lead.name}" has email — sending outreach`, { leadId: item.lead_id })
@@ -183,31 +206,12 @@ export async function handleCall(item: QueueItem): Promise<void> {
 
   await agentLog('caller', `Calling "${lead.name}" at ${lead.phone} — site: ${lead.vercel_deployment_url}`, { leadId: item.lead_id })
 
+  // Starts the call and returns. The call-outcome cron (lib/crons.ts →
+  // pollBlandCall) records the result when Bland reports the call finished
+  // and enqueues the follow-up from there.
   await runCallerAgent(item.lead_id)
 
-  // Refresh lead to get call outcome
-  const { data: calledLead } = await supabase
-    .from('leads')
-    .select('name, vercel_deployment_url, call_outcome')
-    .eq('id', item.lead_id)
-    .single()
-
-  if (calledLead?.vercel_deployment_url) {
-    const calendly = process.env.CALENDLY_LINK || ''
-    await notify(
-      `Call complete: *${calledLead.name}*\n` +
-      `Outcome: ${calledLead.call_outcome || 'unknown'}\n\n` +
-      `${calledLead.vercel_deployment_url}\n` +
-      `${calendly}`
-    )
-  }
-
-  await enqueue({
-    leadId: item.lead_id,
-    queueName: 'followup',
-    pipelineRunId: item.pipeline_run_id || undefined,
-  })
-  await agentLog('caller', `"${calledLead?.name}" called (${calledLead?.call_outcome}) → queued for followup`, { leadId: item.lead_id, level: 'success' })
+  await agentLog('caller', `"${lead.name}" call in progress — outcome will be recorded when the call ends`, { leadId: item.lead_id, level: 'success' })
 }
 
 export async function handleCopywrite(item: QueueItem): Promise<void> {

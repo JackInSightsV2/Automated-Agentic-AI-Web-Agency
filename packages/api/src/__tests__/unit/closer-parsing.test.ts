@@ -26,6 +26,72 @@ describe('extractClosingDetails', () => {
     expect(result.wantsToGoAhead).toBe(false)
   })
 
+  // Regression: a bare "yes" (to "is that Sarah?") or the AI's own "brilliant" used to trigger
+  // spec_sent, a Stripe session, and an SMS.
+  test('"yes" answering an unrelated question is not a commitment', () => {
+    const transcripts = [
+      { user: 'assistant', text: 'Hi there! Is that Sarah?' },
+      { user: 'customer', text: 'Yes' },
+      { user: 'assistant', text: 'Brilliant! Do you have a domain?' },
+      { user: 'customer', text: 'Yes I have one, it\'s sarahs.co.uk' },
+    ]
+    const result = extractClosingDetails(transcripts, 'The customer confirmed her name and that she owns sarahs.co.uk. She will get back to us.')
+    expect(result.wantsToGoAhead).toBe(false)
+    expect(result.domain).toBe('sarahs.co.uk')
+  })
+
+  test('assistant saying "perfect" / "brilliant" never counts', () => {
+    const transcripts = [
+      { user: 'assistant', text: 'Perfect, brilliant, let\'s do it then!' },
+      { user: 'customer', text: 'Hmm, I need to think about it.' },
+    ]
+    const result = extractClosingDetails(transcripts, 'Customer is thinking about it.')
+    expect(result.wantsToGoAhead).toBe(false)
+  })
+
+  test('summary saying they agreed to proceed counts', () => {
+    const result = extractClosingDetails(
+      [{ user: 'customer', text: 'Alright.' }],
+      'The customer agreed to proceed with the website and gave her phone number for the CTA.',
+    )
+    expect(result.wantsToGoAhead).toBe(true)
+  })
+
+  test('Bland analysis.wants_to_go_ahead overrides the regexes', () => {
+    const transcripts = [{ user: 'customer', text: "Yes let's do it!" }]
+    expect(extractClosingDetails(transcripts, 'Agreed to proceed', { wants_to_go_ahead: false }).wantsToGoAhead).toBe(false)
+    expect(extractClosingDetails([{ user: 'customer', text: 'Hmm.' }], '', { wants_to_go_ahead: true }).wantsToGoAhead).toBe(true)
+    expect(extractClosingDetails([{ user: 'customer', text: 'Hmm.' }], '', { wants_to_go_ahead: 'true' }).wantsToGoAhead).toBe(true)
+  })
+
+  test('Bland analysis fills domain, CTA, and changes', () => {
+    const result = extractClosingDetails([], '', {
+      wants_to_go_ahead: true,
+      domain_name: 'Example.co.uk',
+      needs_domain_registration: false,
+      needs_email_setup: false,
+      cta_type: 'email_form',
+      cta_value: 'hello@example.co.uk',
+      requested_changes: 'Swap the hero photo for one of the shopfront',
+    })
+    expect(result.domain).toBe('example.co.uk')
+    expect(result.needsDomain).toBe(false)
+    expect(result.ctaType).toBe('email_form')
+    expect(result.ctaValue).toBe('hello@example.co.uk')
+    expect(result.changes).toContain('hero photo')
+  })
+
+  test('analysis "null" strings are treated as missing', () => {
+    const result = extractClosingDetails(
+      [{ user: 'customer', text: "No I don't have a domain name" }],
+      '',
+      { domain_name: 'null', cta_value: 'null', requested_changes: 'null' },
+    )
+    expect(result.domain).toBeNull()
+    expect(result.needsDomain).toBe(true)
+    expect(result.changes).toBeNull()
+  })
+
   test('extracts domain (e.g. mybusiness.co.uk)', () => {
     const transcripts = [
       { user: 'customer', text: 'Yes I have a domain, it\'s mybusiness.co.uk' },

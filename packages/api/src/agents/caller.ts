@@ -1,7 +1,21 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
-import { fetchWithRetry } from '../lib/fetch-retry'
+import { startCall, getCall, isCallFinished, isCallFailed } from '../lib/bland'
 import { agency, getCallPhone } from '../lib/config'
+
+export type CallOutcome = 'interested' | 'not_interested' | 'voicemail' | 'no_answer'
+
+const OUTCOMES: CallOutcome[] = ['interested', 'not_interested', 'voicemail', 'no_answer']
+
+/** Structured fields we ask Bland to extract after the call (see lib/bland.ts). */
+const CALL_ANALYSIS_SCHEMA = {
+  outcome: 'One of: interested, not_interested, voicemail, no_answer. "interested" only if the person wanted the link or a follow-up.',
+  contact_name: 'First name of the person spoken to, or null',
+  email: 'Email address they gave, or null',
+}
+
+/** A call that has not completed after this long is treated as unanswered. */
+export const CALL_TIMEOUT_MS = 30 * 60 * 1000
 
 export async function runCallerAgent(leadId: string): Promise<void> {
   const { data: lead } = await supabase
@@ -19,6 +33,7 @@ export async function runCallerAgent(leadId: string): Promise<void> {
 
   const phone = getCallPhone(lead.phone)
   const hasEmail = !!lead.email
+  const calendly = process.env.CALENDLY_LINK || 'a booking link we will text over'
 
   const task = `You are ${agency.callerName}, a friendly business development rep at ${agency.name}, a web design studio that helps local businesses get online. You're making a warm introductory call. Be natural, conversational, and human -- NOT robotic or salesy. Use a warm British tone.
 
@@ -54,7 +69,7 @@ Business context (use naturally in conversation, don't read out verbatim):
 - Business type: ${lead.category}
 - Location: ${lead.address}
 - The website we built: ${lead.vercel_deployment_url}
-- Booking link: ${process.env.CALENDLY_LINK}
+- Booking link: ${calendly}
 ${lead.google_rating ? `- Their Google rating: ${lead.google_rating}/5 (${lead.google_review_count} reviews) -- you can compliment them on this` : ''}
 
 Style notes:
@@ -72,106 +87,150 @@ CRITICAL RULES:
 - Only end the call after you've delivered your message and said goodbye properly.
 - If it goes to voicemail, leave the full voicemail message from step 7 above.`
 
-  const apiKey = process.env.BLAND_AI_API_KEY
-  if (!apiKey) throw new Error('BLAND_AI_API_KEY must be set')
-
-  const res = await fetchWithRetry('https://api.bland.ai/v1/calls', {
-    method: 'POST',
-    headers: {
-      Authorization: apiKey,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      phone_number: phone,
-      task,
-      voice: 'nat',
-      language: 'en-GB',
-      max_duration: 5,
-      wait_for_greeting: false,
-      record: true,
-      interruption_threshold: 200,
-      voicemail_action: 'leave_message',
-      noise_cancellation: true,
-      metadata: { lead_id: leadId }
-    })
+  const callId = await startCall({
+    phone_number: phone,
+    task,
+    max_duration: 5,
+    wait_for_greeting: false,
+    interruption_threshold: 200,
+    voicemail_action: 'leave_message',
+    analysis_schema: CALL_ANALYSIS_SCHEMA,
+    metadata: { lead_id: leadId },
   })
-
-  const data = await res.json() as { call_id?: string }
-
-  if (!data.call_id) throw new Error(`Bland call failed: ${JSON.stringify(data)}`)
 
   await supabase
     .from('leads')
     .update({
-      bland_call_id: data.call_id,
+      bland_call_id: callId,
       call_initiated_at: new Date().toISOString(),
+      call_completed_at: null,
+      call_outcome: null,
       status: 'called',
       status_updated_at: new Date().toISOString()
     })
     .eq('id', leadId)
 
-  await agentLog('caller', `Call initiated: ${data.call_id}`, { leadId, level: 'success' })
+  await agentLog('caller', `Call initiated: ${callId}`, { leadId, level: 'success' })
 }
 
-export async function pollBlandCall(leadId: string): Promise<string | null> {
+/**
+ * Check whether the lead's intro call has finished and, if so, record the
+ * outcome and move the lead on. Called by the crons every 30s for every lead
+ * with an in-flight call (there is no Bland webhook in a self-hosted setup).
+ *
+ * Returns the outcome when this call recorded it, otherwise null.
+ */
+export async function pollBlandCall(leadId: string): Promise<CallOutcome | null> {
   const { data: lead } = await supabase
     .from('leads')
-    .select('bland_call_id, name')
+    .select('bland_call_id, name, status, call_initiated_at, call_completed_at, pipeline_run_id')
     .eq('id', leadId)
     .single()
 
   if (!lead?.bland_call_id) return null
+  if (lead.call_completed_at) return null // Already recorded
+  if (!process.env.BLAND_AI_API_KEY) return null
 
-  const apiKey = process.env.BLAND_AI_API_KEY
-  if (!apiKey) return null
+  const call = await getCall(lead.bland_call_id)
 
-  const res = await fetchWithRetry(`https://api.bland.ai/v1/calls/${lead.bland_call_id}`, {
-    headers: { Authorization: apiKey }
+  const startedAt = lead.call_initiated_at ? new Date(lead.call_initiated_at).getTime() : Date.now()
+  const timedOut = Date.now() - startedAt > CALL_TIMEOUT_MS
+
+  if (!isCallFinished(call) && !isCallFailed(call) && !timedOut) return null
+
+  const outcome: CallOutcome = isCallFinished(call)
+    ? inferOutcome(call.summary || '', call.analysis)
+    : 'no_answer'
+
+  // Try to extract any email or alternate number they gave during the call
+  const contactInfo = extractContactInfo(call.transcripts || [], call.analysis)
+
+  const updateData: Record<string, unknown> = {
+    call_completed_at: new Date().toISOString(),
+    call_outcome: outcome,
+    status: outcome === 'interested' ? 'hitl_ready' : 'called',
+    status_updated_at: new Date().toISOString()
+  }
+  if (contactInfo.email) updateData.email = contactInfo.email
+  if (contactInfo.contactName) updateData.contact_name = contactInfo.contactName
+
+  // Only the poller that observes call_completed_at unset gets to record it
+  const { data: updated } = await supabase
+    .from('leads')
+    .update(updateData)
+    .eq('id', leadId)
+    .is('call_completed_at', null)
+    .select('id')
+    .single()
+
+  if (!updated) return null
+
+  await agentLog('caller', `Call outcome for ${lead.name}: ${outcome}${contactInfo.email ? ` (captured email: ${contactInfo.email})` : ''}${timedOut && !isCallFinished(call) ? ' (timed out waiting for Bland)' : ''}`, {
+    leadId,
+    level: outcome === 'interested' ? 'success' : 'info',
+    metadata: { summary: call.summary, analysis: call.analysis, contactInfo, blandStatus: call.status }
   })
-  const call = await res.json() as { status?: string; summary?: string; transcripts?: Array<{ user: string; text: string }> }
 
-  if (call.status === 'completed') {
-    const outcome = inferOutcome(call.summary || '')
+  const { notify } = await import('../lib/telegram')
+  const calendly = process.env.CALENDLY_LINK || ''
+  await notify(
+    `Call complete: ${lead.name}\n` +
+    `Outcome: ${outcome}\n\n` +
+    `${call.summary ? `${call.summary.slice(0, 400)}\n\n` : ''}` +
+    `${calendly}`
+  ).catch(() => {})
 
-    // Try to extract any email or alternate number they gave during the call
-    const contactInfo = extractContactInfo(call.transcripts || [])
-
-    const updateData: Record<string, unknown> = {
-      call_completed_at: new Date().toISOString(),
-      call_outcome: outcome,
-      status: outcome === 'interested' ? 'hitl_ready' : 'called',
-      status_updated_at: new Date().toISOString()
-    }
-
-    // Save any contact info captured during the call
-    if (contactInfo.email) updateData.email = contactInfo.email
-    if (contactInfo.contactName) updateData.contact_name = contactInfo.contactName
-
-    await supabase.from('leads').update(updateData).eq('id', leadId)
-
-    await agentLog('caller', `Call outcome for ${lead.name}: ${outcome}${contactInfo.email ? ` (captured email: ${contactInfo.email})` : ''}`, {
+  // Follow-up (text with site link + booking link, then a second call) makes
+  // sense for anyone we did not clearly lose. Not-interested leads are left alone.
+  if (outcome !== 'not_interested') {
+    const { enqueue } = await import('../lib/queue')
+    await enqueue({
       leadId,
-      level: 'success',
-      metadata: { summary: call.summary, contactInfo }
+      queueName: 'followup',
+      pipelineRunId: lead.pipeline_run_id || undefined,
     })
-
-    return outcome
+    await agentLog('caller', `"${lead.name}" → queued for followup`, { leadId })
   }
 
-  return null
+  return outcome
 }
 
-export function inferOutcome(summary: string): string {
+const NOT_INTERESTED = /\b(not interested|no thank|no thanks|don'?t need|do not need|not (for|looking)|already (have|has|got) (a |an )?(website|site|web ?page)|declined|not right now|no,? (i'?m|we'?re) (fine|good|ok)|stop calling|remove (me|us))\b/
+const VOICEMAIL = /\b(voicemail|voice mail|answering machine|answer ?phone|left (a |the )?message)\b/
+const NO_ANSWER = /\b(no answer|didn'?t answer|did not answer|not answered|unanswered|no one (picked|answered)|nobody (picked|answered)|rang out|hung up (immediately|straight away|right away)|call (dropped|failed)|wrong number)\b/
+const INTERESTED = /\b(interested|keen|love[sd]? it|loved|sounds (good|great)|happy (to|for)|book(ed|ing)?|send (me |it |that |the )|text (me|it|that)|whatsapp|go ahead|follow[- ]?up|call back|callback|yes)\b/
+
+/**
+ * Classify the intro call. Prefers Bland's structured `analysis.outcome`;
+ * otherwise scans the summary, checking negative outcomes before positive ones
+ * so "not interested" can never read as "interested".
+ */
+export function inferOutcome(summary: string, analysis?: Record<string, unknown> | null): CallOutcome {
+  const structured = typeof analysis?.outcome === 'string' ? analysis.outcome.toLowerCase().trim() : null
+  if (structured && (OUTCOMES as string[]).includes(structured)) return structured as CallOutcome
+
   const s = summary.toLowerCase()
-  if (s.includes('interested') || s.includes('yes') || s.includes('love') || s.includes('book') || s.includes('whatsapp') || s.includes('send')) return 'interested'
-  if (s.includes('voicemail') || s.includes('left message')) return 'voicemail'
-  if (s.includes('not interested') || s.includes('no thank')) return 'not_interested'
+  if (!s.trim()) return 'no_answer'
+  if (NOT_INTERESTED.test(s)) return 'not_interested'
+  if (VOICEMAIL.test(s)) return 'voicemail'
+  if (NO_ANSWER.test(s)) return 'no_answer'
+  if (INTERESTED.test(s)) return 'interested'
   return 'no_answer'
 }
 
-/** Extract contact name, email, or phone from the call transcript */
-export function extractContactInfo(transcripts: Array<{ user: string; text: string }>): { email?: string; altPhone?: string; contactName?: string } {
+/** Extract contact name and email from Bland's analysis, falling back to the transcript */
+export function extractContactInfo(
+  transcripts: Array<{ user: string; text: string }>,
+  analysis?: Record<string, unknown> | null,
+): { email?: string; altPhone?: string; contactName?: string } {
   const result: { email?: string; altPhone?: string; contactName?: string } = {}
+
+  if (typeof analysis?.email === 'string' && /[\w.-]+@[\w.-]+\.\w{2,}/.test(analysis.email)) {
+    result.email = analysis.email.toLowerCase().trim()
+  }
+  if (typeof analysis?.contact_name === 'string' && /^[A-Za-z][A-Za-z'-]{1,30}$/.test(analysis.contact_name.trim())) {
+    result.contactName = analysis.contact_name.trim()
+  }
 
   const fullText = transcripts
     .filter(t => t.user !== 'assistant')
@@ -179,23 +238,27 @@ export function extractContactInfo(transcripts: Array<{ user: string; text: stri
     .join(' ')
 
   // Look for email pattern
-  const emailMatch = fullText.match(/[\w.-]+@[\w.-]+\.\w{2,}/)
-  if (emailMatch) result.email = emailMatch[0].toLowerCase()
+  if (!result.email) {
+    const emailMatch = fullText.match(/[\w.-]+@[\w.-]+\.\w{2,}/)
+    if (emailMatch) result.email = emailMatch[0].toLowerCase()
+  }
 
-  // Extract contact name — look for the AI repeating back the name after asking
-  const aiText = transcripts
-    .filter(t => t.user === 'assistant')
-    .map(t => t.text)
-    .join(' ')
-
-  // Pattern: "Nice to meet you [Name]" or "lovely to meet you [Name]"
-  const nameMatch = aiText.match(/(?:nice|lovely|great|good) to (?:meet|speak with|chat with) you[,!]?\s+([A-Z][a-z]+)/i)
-  if (nameMatch) result.contactName = nameMatch[1]
-
-  // Fallback: "Thanks [Name]" or "Cheers [Name]" near end of call
   if (!result.contactName) {
-    const thanksMatch = aiText.match(/(?:thanks|cheers|thank you)\s+(?:so much\s+)?([A-Z][a-z]+)[,!]/i)
-    if (thanksMatch) result.contactName = thanksMatch[1]
+    // Extract contact name — look for the AI repeating back the name after asking
+    const aiText = transcripts
+      .filter(t => t.user === 'assistant')
+      .map(t => t.text)
+      .join(' ')
+
+    // Pattern: "Nice to meet you [Name]" or "lovely to meet you [Name]"
+    const nameMatch = aiText.match(/(?:nice|lovely|great|good) to (?:meet|speak with|chat with) you[,!]?\s+([A-Z][a-z]+)/i)
+    if (nameMatch) result.contactName = nameMatch[1]
+
+    // Fallback: "Thanks [Name]" or "Cheers [Name]" near end of call
+    if (!result.contactName) {
+      const thanksMatch = aiText.match(/(?:thanks|cheers|thank you)\s+(?:so much\s+)?([A-Z][a-z]+)[,!]/i)
+      if (thanksMatch) result.contactName = thanksMatch[1]
+    }
   }
 
   return result

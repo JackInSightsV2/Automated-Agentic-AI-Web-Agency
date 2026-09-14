@@ -11,10 +11,12 @@ The system is a monorepo with three main components:
 ## Pipeline Flow
 
 ```
-Scout -> Verify -> Copywrite -> Build -> Review -> Deploy -> Email -> Call -> Follow-up -> Close -> Deliver
+Scout -> Verify -> Copywrite -> Build -> SEO -> Review -> Deploy -> Email -> Call -> Follow-up -> Close -> Deliver
 ```
 
 Each step is handled by a specialized agent and connected via a queue system.
+
+Phone calls are asynchronous. The `call` and `close` handlers start a Bland.ai call and return; a cron polls Bland every 30s (`pollBlandCall` / `pollClosingCall`) and, when the call has ended, records the outcome, updates the lead, and queues the next stage (follow-up, or job spec + payment link). Bland is asked for structured `analysis` fields (outcome, contact name, domain, CTA, changes); transcript regexes are only the fallback.
 
 ### Lead Statuses
 
@@ -41,11 +43,11 @@ Each step is handled by a specialized agent and connected via a queue system.
 
 The queue system provides reliable, ordered processing:
 
-- **Queues:** `verify`, `build`, `deploy`, `call`, `followup`, `close`
-- **States:** `active`, `paused`
+- **Queues:** `verify`, `copywrite`, `build`, `seo`, `review`, `deploy`, `call`, `followup`, `close` (the list lives in `packages/api/src/types.ts` as `QUEUE_NAMES`)
+- **States:** `active`, `paused` (stored in `system_config`)
 - **Items:** each has `lead_id`, `queue_name`, `status`, `priority`
 
-Queue processing is driven by cron jobs that poll for pending items.
+Queue processing is driven by cron jobs that poll for pending items. Items left in `processing` by a crash or restart are marked `failed` (immediately on startup, or after `QUEUE_STALE_MINUTES`) so they can be retried from the dashboard instead of blocking the queue.
 
 ### Human-in-the-Loop (HITL) Gates
 
@@ -77,11 +79,13 @@ The dashboard connects to the API via SSE for real-time updates:
 
 ## Cron Jobs
 
-Periodic tasks:
+Periodic tasks (`packages/api/src/lib/crons.ts`):
 
-- Queue polling (process pending items)
-- Stripe payment checking (poll for completed sessions)
-- Pipeline monitoring (detect stalled leads)
+- Queue polling every 15s (process pending items, fail stale ones)
+- Call outcome polling every 30s (intro and closing calls)
+- Stripe payment checking every 60s (poll for completed sessions; the webhook is a faster path to the same `markLeadPaid`)
+- Warm-lead monitoring every 60s
+- Auto-fetch every 3.5 min: once a lead has reached the call stage, scout more of the last query, but only while fewer than `AUTO_FETCH_MAX_INFLIGHT` items are in flight and the verify queue is active
 
 ## System Diagram
 

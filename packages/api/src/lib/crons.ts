@@ -2,95 +2,130 @@ import { supabase } from './supabase'
 import { agentLog } from './logger'
 import { notify } from './telegram'
 import { checkPaidSessions } from './stripe'
-import { runDeliveryPipeline } from '../agents/delivery'
-import { dequeue, completeItem, failItem, isQueueActive, isWithinBusinessHours, getConcurrency, getProcessingCount } from './queue'
+import { markLeadPaid } from './payments'
+import { dequeue, completeItem, failItem, isQueueActive, isWithinBusinessHours, getConcurrency, getQueueStats, recoverStaleItems } from './queue'
 import { handleVerify, handleCopywrite, handleBuild, handleSeo, handleReview, handleDeploy, handleCall, handleFollowup, handleClose } from './queue-handlers'
 import { runMonitorAgent } from '../agents/monitor'
+import { pollBlandCall } from '../agents/caller'
+import { pollClosingCall } from '../agents/closer'
 import type { QueueName, QueueItem } from '../types'
+
+/** Items stuck in `processing` longer than this are failed so the slot frees up. */
+const STALE_ITEM_MS = Number.parseInt(process.env.QUEUE_STALE_MINUTES || '30') * 60 * 1000
+
+/** Auto-fetch will not scout while this many (or more) items are in flight. */
+const AUTO_FETCH_MAX_INFLIGHT = Number.parseInt(process.env.AUTO_FETCH_MAX_INFLIGHT || '10')
 
 /** Check Stripe for paid sessions, match to leads, and trigger delivery */
 async function checkPayments() {
   try {
     const sessions = await checkPaidSessions()
-
     for (const session of sessions) {
-      // Check if this lead is in spec_sent status (waiting for payment)
-      const { data: lead } = await supabase
-        .from('leads')
-        .select('id, name, status, paid_at, contact_name')
-        .eq('id', session.leadId)
-        .single()
-
-      if (!lead) continue
-      if (lead.paid_at) continue // Already processed
-      if (lead.status !== 'spec_sent') continue
-
-      const contactName = lead.contact_name || lead.name.split(' ')[0]
-
-      // Mark as paid
-      await supabase.from('leads').update({
-        status: 'paid',
-        status_updated_at: new Date().toISOString(),
-        paid_at: new Date().toISOString(),
-      }).eq('id', lead.id)
-
-      await agentLog('cron', `Payment received for ${lead.name}: £${session.amountTotal}`, {
-        leadId: lead.id,
-        level: 'success'
-      })
-
-      await notify(
-        `Payment received from ${contactName} (${lead.name}) — £${session.amountTotal}!\n\n` +
-        `Starting delivery process...`
-      )
-
-      // Trigger the delivery pipeline: apply changes → SEO → review → deploy
-      runDeliveryPipeline(lead.id).catch(async (err) => {
-        await agentLog('cron', `Delivery pipeline failed for ${lead.name}: ${String(err)}`, {
-          leadId: lead.id,
-          level: 'error'
-        })
-      })
+      // markLeadPaid is conditional on status = spec_sent, so a session that was
+      // already handled here or by the webhook is a no-op.
+      await markLeadPaid(session.leadId, { source: 'stripe-poll', amount: session.amountTotal })
     }
   } catch (err) {
     console.error('[CRON] Payment check error:', err)
   }
 }
 
+/**
+ * Record outcomes for in-flight Bland calls. There is no webhook in a
+ * self-hosted setup, so this is what moves a lead past `called` / `closing_call`.
+ */
+async function checkCallOutcomes() {
+  try {
+    const { data: calling } = await supabase
+      .from('leads')
+      .select('id, name')
+      .eq('status', 'called')
+      .is('call_completed_at', null)
+
+    for (const lead of calling || []) {
+      try {
+        await pollBlandCall(lead.id)
+      } catch (err) {
+        console.error(`[CRON] Call poll error for ${lead.name}:`, err)
+      }
+    }
+
+    const { data: closing } = await supabase
+      .from('leads')
+      .select('id, name')
+      .eq('status', 'closing_call')
+
+    for (const lead of closing || []) {
+      try {
+        await pollClosingCall(lead.id)
+      } catch (err) {
+        console.error(`[CRON] Closing call poll error for ${lead.name}:`, err)
+      }
+    }
+  } catch (err) {
+    console.error('[CRON] Call outcome check error:', err)
+  }
+}
+
+const HANDLERS: Array<[QueueName, (item: QueueItem) => Promise<void>]> = [
+  ['verify', handleVerify],
+  ['copywrite', handleCopywrite],
+  ['build', handleBuild],
+  ['seo', handleSeo],
+  ['review', handleReview],
+  ['deploy', handleDeploy],
+  ['call', handleCall],
+  ['followup', handleFollowup],
+  ['close', handleClose],
+]
+
+let queueTickRunning = false
+
 /** Process all queue stages */
 async function processQueues() {
-  const queues: [QueueName, (item: QueueItem) => Promise<void>][] = [
-    ['verify', handleVerify],
-    ['copywrite', handleCopywrite],
-    ['build', handleBuild],
-    ['seo', handleSeo],
-    ['review', handleReview],
-    ['deploy', handleDeploy],
-    ['call', handleCall],
-    ['followup', handleFollowup],
-    ['close', handleClose],
-  ]
+  if (queueTickRunning) return // Previous tick still going — don't overlap
+  queueTickRunning = true
+  try {
+    await failStaleItems()
 
-  for (const [name, handler] of queues) {
-    try {
-      if (!await isQueueActive(name)) continue
+    const stats = await getQueueStats()
 
-      // Business hours enforcement for call and close queues
-      if (['call', 'close'].includes(name) && !await isWithinBusinessHours()) continue
+    for (const [name, handler] of HANDLERS) {
+      try {
+        if (!await isQueueActive(name)) continue
 
-      // Concurrency check
-      const maxWorkers = await getConcurrency(name)
-      const currentWorkers = await getProcessingCount(name)
-      if (currentWorkers >= maxWorkers) continue
+        // Business hours enforcement for call and close queues
+        if (['call', 'close'].includes(name) && !await isWithinBusinessHours()) continue
 
-      const item = await dequeue(name)
-      if (item) {
-        // Fire and forget — allows multiple items to process in parallel
-        processItem(name, item, handler)
+        // Concurrency check (dequeue re-checks atomically)
+        const maxWorkers = await getConcurrency(name)
+        if (stats[name].processing >= maxWorkers) continue
+
+        const item = await dequeue(name)
+        if (item) {
+          // Fire and forget — allows multiple items to process in parallel
+          processItem(name, item, handler)
+        }
+      } catch (err) {
+        console.error(`[CRON] Queue ${name} error:`, err)
       }
-    } catch (err) {
-      console.error(`[CRON] Queue ${name} error:`, err)
     }
+  } finally {
+    queueTickRunning = false
+  }
+}
+
+async function failStaleItems() {
+  try {
+    const stale = await recoverStaleItems(STALE_ITEM_MS)
+    for (const item of stale) {
+      await agentLog('queue', `${item.queue_name}: item for lead ${item.lead_id} stuck in processing for >${STALE_ITEM_MS / 60000}m — marked failed (retry from dashboard)`, {
+        leadId: item.lead_id,
+        level: 'warn',
+      })
+    }
+  } catch (err) {
+    console.error('[CRON] Stale item recovery error:', err)
   }
 }
 
@@ -100,20 +135,6 @@ async function processItem(name: QueueName, item: QueueItem, handler: (item: Que
     await completeItem(item.id)
   } catch (err) {
     const errStr = String(err)
-
-    // Business hours errors → put back in queue (reset to pending), don't mark as failed
-    if (errStr.includes('outside business hours')) {
-      await supabase
-        .from('queue_items')
-        .update({ status: 'pending', updated_at: new Date().toISOString() })
-        .eq('id', item.id)
-      await agentLog('queue', `${name}: outside business hours, "${item.lead_id}" returned to queue`, {
-        leadId: item.lead_id,
-        level: 'warn',
-      })
-      return
-    }
-
     await failItem(item.id, errStr)
     await agentLog('queue', `${name} failed for lead ${item.lead_id}: ${errStr}`, {
       leadId: item.lead_id,
@@ -122,10 +143,17 @@ async function processItem(name: QueueName, item: QueueItem, handler: (item: Que
   }
 }
 
-/** Auto-fetch: when leads reach the call stage, scout for more every 3.5 minutes */
+/**
+ * Auto-fetch: once the first batch has reached the call stage, keep the
+ * pipeline topped up — but only while fewer than AUTO_FETCH_MAX_INFLIGHT
+ * items are pending/processing across all queues, and only while the verify
+ * queue is active (so "Finish Work Day" / pause stops it).
+ */
 async function autoFetchLeads() {
   try {
-    // Check if any leads are waiting at the call stage (pending_approval = HITL gate)
+    if (!await isQueueActive('verify')) return
+
+    // Trigger: at least one lead has reached the call stage
     const { count: atCallStage } = await supabase
       .from('queue_items')
       .select('*', { count: 'exact', head: true })
@@ -134,7 +162,16 @@ async function autoFetchLeads() {
 
     if (!atCallStage || atCallStage === 0) return
 
-    // Check we're not already scouting (no active pipeline runs in last 60s)
+    // Cap: total work in flight. A single unapproved HITL item must not make
+    // this scout (and build, and deploy) new leads every 3.5 minutes forever.
+    const { count: inFlight } = await supabase
+      .from('queue_items')
+      .select('*', { count: 'exact', head: true })
+      .in('status', ['pending', 'pending_approval', 'approved', 'processing'])
+
+    if ((inFlight || 0) >= AUTO_FETCH_MAX_INFLIGHT) return
+
+    // Check we're not already scouting (no scout activity in last 3 minutes)
     const { data: recentScout } = await supabase
       .from('agent_logs')
       .select('created_at')
@@ -145,10 +182,10 @@ async function autoFetchLeads() {
 
     if (recentScout) {
       const lastScoutAge = Date.now() - new Date(recentScout.created_at).getTime()
-      if (lastScoutAge < 180000) return // Don't scout if we scouted in the last 3 minutes
+      if (lastScoutAge < 180000) return
     }
 
-    await agentLog('cron', 'Auto-fetch: leads at call stage, scouting for more...', { level: 'info' })
+    await agentLog('cron', `Auto-fetch: ${inFlight || 0}/${AUTO_FETCH_MAX_INFLIGHT} items in flight, scouting for more...`, { level: 'info' })
 
     // Get the last pipeline run's query to reuse, or default
     const { data: lastRun } = await supabase
@@ -182,26 +219,32 @@ let paymentInterval: ReturnType<typeof setInterval> | null = null
 let queueInterval: ReturnType<typeof setInterval> | null = null
 let autoFetchInterval: ReturnType<typeof setInterval> | null = null
 let monitorInterval: ReturnType<typeof setInterval> | null = null
+let callInterval: ReturnType<typeof setInterval> | null = null
 
 export function startCrons() {
   console.log('[CRON] Starting payment check — every 60 seconds')
   console.log('[CRON] Starting queue processor — every 15 seconds')
+  console.log('[CRON] Starting call outcome poller — every 30 seconds')
   console.log('[CRON] Starting auto-fetch — every 3.5 minutes')
   console.log('[CRON] Starting monitor — every 60 seconds')
 
+  // Anything still 'processing' from before this process started is dead.
+  recoverStaleItems(0)
+    .then(async (items) => {
+      if (items.length === 0) return
+      console.log(`[CRON] Failed ${items.length} queue item(s) left processing by a previous run`)
+      await agentLog('queue', `Server restarted: ${items.length} in-flight item(s) marked failed — retry from the dashboard`, { level: 'warn' })
+    })
+    .catch(err => console.error('[CRON] Startup recovery error:', err))
+
   // Run immediately on startup
   checkPayments()
+  checkCallOutcomes()
 
-  // Payment check every 60 seconds
   paymentInterval = setInterval(checkPayments, 60 * 1000)
-
-  // Queue processor every 15 seconds
   queueInterval = setInterval(processQueues, 15 * 1000)
-
-  // Auto-fetch new leads every 3.5 minutes
+  callInterval = setInterval(checkCallOutcomes, 30 * 1000)
   autoFetchInterval = setInterval(autoFetchLeads, 3.5 * 60 * 1000)
-
-  // Monitor warm leads every 60 seconds
   monitorInterval = setInterval(async () => {
     try {
       await runMonitorAgent()
@@ -212,23 +255,14 @@ export function startCrons() {
 }
 
 export function stopCrons() {
-  if (paymentInterval) {
-    clearInterval(paymentInterval)
-    paymentInterval = null
+  for (const t of [paymentInterval, queueInterval, autoFetchInterval, monitorInterval, callInterval]) {
+    if (t) clearInterval(t)
   }
-  if (queueInterval) {
-    clearInterval(queueInterval)
-    queueInterval = null
-  }
-  if (autoFetchInterval) {
-    clearInterval(autoFetchInterval)
-    autoFetchInterval = null
-  }
-  if (monitorInterval) {
-    clearInterval(monitorInterval)
-    monitorInterval = null
-  }
+  paymentInterval = queueInterval = autoFetchInterval = monitorInterval = callInterval = null
 }
+
+// Exported for tests
+export { checkCallOutcomes, autoFetchLeads, processQueues, checkPayments }
 
 // Graceful shutdown — clean up intervals and Telegram bot on process exit
 function handleShutdown(signal: string) {

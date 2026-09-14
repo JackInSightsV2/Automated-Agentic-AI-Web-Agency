@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { supabase } from '../lib/supabase'
-import { getQueueStats, getQueueStates, getBusinessHours, getHITLConfig, getConcurrencyConfig } from '../lib/queue'
+import { getQueueStats, getQueueStates, getBusinessHours, getHITLConfig, getConcurrencyConfig, getWorkerNames } from '../lib/queue'
 
 export const eventsRouter = new Hono()
 
@@ -15,20 +15,15 @@ eventsRouter.get('/stream', async (c) => {
 
     while (running) {
       try {
-        const [queueStats, queueStates, businessHours, hitlConfig, concurrency] = await Promise.all([
+        // Config reads are cached for 2s in lib/queue.ts; stats is a single query.
+        const [queueStats, queueStates, businessHours, hitlConfig, concurrency, workerNames] = await Promise.all([
           getQueueStats(),
           getQueueStates(),
           getBusinessHours(),
           getHITLConfig(),
           getConcurrencyConfig(),
+          getWorkerNames(),
         ])
-
-        // Worker names
-        const { data: workerNamesRow } = await supabase
-          .from('system_config')
-          .select('value')
-          .eq('key', 'worker_names')
-          .single()
 
         // Recent logs (more for better visibility)
         const { data: recentLogs } = await supabase
@@ -50,6 +45,7 @@ eventsRouter.get('/stream', async (c) => {
           .select('id, lead_id, queue_name, created_at')
           .eq('status', 'pending_approval')
           .order('created_at', { ascending: true })
+          .limit(50)
 
         // Currently processing items (what each agent is working on right now)
         const { data: processingItems } = await supabase
@@ -63,7 +59,7 @@ eventsRouter.get('/stream', async (c) => {
           businessHours,
           hitlConfig,
           concurrency,
-          workerNames: (workerNamesRow?.value || {}) as Record<string, string>,
+          workerNames,
           recentLogs: recentLogs || [],
           activeLeads: activeLeads || [],
           hitlItems: hitlItems || [],
