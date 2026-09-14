@@ -15,8 +15,7 @@ Step-by-step guide to get the Automated Agentic AI Web Agency running.
 2. Go to **Settings > API** and copy:
    - Project URL -> `SUPABASE_URL`
    - Service role key -> `SUPABASE_SERVICE_KEY`
-3. Run the migration SQL from [DATABASE.md](DATABASE.md) in the SQL editor
-4. Enable realtime on the `leads`, `queue`, and `agent_logs` tables
+3. Open the SQL editor and run the whole of [`supabase/schema.sql`](../supabase/schema.sql). See [DATABASE.md](DATABASE.md) for the table reference and for migrating a database created from the older setup SQL.
 
 ## 2. Vercel Setup
 
@@ -47,7 +46,7 @@ Step-by-step guide to get the Automated Agentic AI Web Agency running.
 1. Message [@BotFather](https://t.me/BotFather) on Telegram
 2. Create a new bot with `/newbot`
 3. Copy the token -> `TELEGRAM_BOT_TOKEN`
-4. Message your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your chat ID -> `TELEGRAM_ADMIN_ID`
+4. Message your bot, then visit `https://api.telegram.org/bot<TOKEN>/getUpdates` to find your chat ID -> `TELEGRAM_ADMIN_CHAT_ID`
 
 ## 6. Email Setup (Resend)
 
@@ -62,6 +61,7 @@ Step-by-step guide to get the Automated Agentic AI Web Agency running.
 1. Go to [Google Cloud Console](https://console.cloud.google.com)
 2. Enable the **Places API**
 3. Create an API key -> `GOOGLE_PLACES_API_KEY`
+4. (Optional) Set `MOCK_SCOUT=true` to run the pipeline against bundled sample businesses without a Google key
 
 ## 8. Gemini CLI + Nano Banana (Image Generation)
 

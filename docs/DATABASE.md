@@ -1,214 +1,136 @@
 # Database Schema
 
-The system uses Supabase (PostgreSQL) with the following tables.
+The system uses Supabase (PostgreSQL). The canonical schema lives in **[`supabase/schema.sql`](../supabase/schema.sql)** and mirrors the TypeScript types in `packages/api/src/types.ts`. Keep the two in sync when adding columns.
+
+## Setup
+
+**Fresh project:** open the Supabase SQL editor and run the whole of `supabase/schema.sql`. It is idempotent, so re-running it is safe.
+
+**Project created from the old setup SQL** (you have tables called `queue` and `queue_state`): run `supabase/migrate-from-docs-v1.sql` instead. It renames the changed columns, adds the missing ones, moves any rows from `queue` into `queue_items`, and creates `system_config`.
+
+Common errors that mean the schema is out of date:
+
+| Error | Cause |
+|-------|-------|
+| `relation "queue_items" does not exist` | You ran the old SQL; the code uses `queue_items`, not `queue` |
+| `there is no unique or exclusion constraint matching the ON CONFLICT specification` | `leads.google_place_id` is missing its `UNIQUE` constraint (scout upserts on it) |
+| `column "google_place_id" of relation "leads" does not exist` (or `website_detected`, `bland_call_id`, ...) | `leads` is missing columns; run the migration |
+| Queue pause / concurrency / HITL toggles do nothing | `system_config` rows are missing; the API updates them with `.update()` and never inserts |
 
 ## Tables
 
 ### `leads`
 
-The main table tracking every business through the pipeline.
+One row per business. Column set is the `Lead` interface in `types.ts`.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | uuid | Primary key |
 | `name` | text | Business name |
-| `category` | text | Business type (e.g. "plumber", "bakery") |
-| `address` | text | Business address |
+| `category` | text | Business type (from Google Places `types[0]`) |
+| `address` | text | Formatted address |
+| `city` | text | City (currently unused by scout, reserved) |
 | `phone` | text | Business phone number |
 | `email` | text | Business email |
-| `contact_name` | text | Name of person spoken to |
-| `status` | text | Current pipeline status |
-| `status_updated_at` | timestamptz | When status last changed |
+| `google_place_id` | text **unique** | Google Places ID. Scout upserts `ON CONFLICT (google_place_id)` |
 | `google_rating` | numeric | Google Maps rating |
 | `google_review_count` | integer | Number of Google reviews |
-| `viability_score` | integer | Lead quality score |
-| `creative_brief` | jsonb | Copywriter output (brand voice, colors, content) |
-| `vercel_deployment_url` | text | Live preview URL |
+| `website_detected` | text | Existing website URL, if scout found one |
+| `status` | text | Current pipeline status (see `LeadStatus` in `types.ts`) |
+| `status_updated_at` | timestamptz | When status last changed (set by code) |
+| `site_html` | text | Built site HTML |
+| `site_prompt` | text | Prompt used for the build |
 | `vercel_project_id` | text | Vercel project identifier |
-| `email_sent_at` | timestamptz | When outreach email was sent |
-| `call_id` | text | Bland.ai call ID |
-| `call_completed_at` | timestamptz | When call finished |
+| `vercel_deployment_url` | text | Live preview URL |
+| `final_domain` | text | Customer domain once connected |
+| `email_sent_at` / `email_opened_at` / `email_clicked_at` | timestamptz | Outreach email tracking |
+| `bland_call_id` | text | Bland.ai call ID for the first call |
+| `call_initiated_at` / `call_completed_at` | timestamptz | First call timing |
 | `call_outcome` | text | interested / not_interested / voicemail / no_answer |
 | `demo_booked_at` | timestamptz | When Calendly booking happened |
 | `calendly_event_url` | text | Calendly event URL |
-| `stripe_session_id` | text | Stripe checkout session ID |
-| `paid_at` | timestamptz | When payment was received |
-| `amount_paid` | numeric | Amount paid |
-| `domain` | text | Customer domain name |
-| `needs_domain` | boolean | Whether they need domain registration |
-| `needs_email` | boolean | Whether they need email setup |
-| `cta_type` | text | phone or email_form |
-| `cta_value` | text | Phone number or email for CTA |
-| `requested_changes` | text | Changes requested during closing call |
+| `pipeline_run_id` | uuid | FK to `pipeline_runs` |
 | `error` | text | Last error message |
-| `pipeline_run_id` | uuid | FK to pipeline_runs |
+| `viability_score` | integer | Verifier score (0-100) |
+| `viability_notes` | text | Verifier reasoning |
+| `companies_house_status` / `companies_house_number` | text | Companies House lookup result |
+| `contact_name` | text | Name of person spoken to |
+| `closing_call_id` / `closing_call_at` / `closing_summary` | text / timestamptz / text | Closing call details |
+| `desired_domain` | text | Domain the client asked for |
+| `needs_domain` | boolean | Whether we register a domain for them |
+| `needs_email_setup` | boolean | Whether they need professional email |
+| `cta_type` / `cta_value` | text | Site call-to-action: phone or email_form, and its value |
+| `requested_changes` | text | Changes requested during closing call |
+| `stripe_payment_link` | text | Stripe payment link sent to client |
+| `paid_at` | timestamptz | When payment was received |
+| `total_price` | numeric | Amount charged |
+| `creative_brief` | text | Copywriter output |
+| `review_attempts` | integer | Failed code-review count (escalates to HITL at 3) |
+| `review_result` | text | Last review output |
+| `skip_to_deploy` | boolean | Set on post-payment change requests; build goes straight to deploy |
+| `followup_call_id` | text | Bland.ai call ID for the follow-up call |
 | `created_at` | timestamptz | When lead was discovered |
+| `updated_at` | timestamptz | Maintained by trigger; dashboard orders by it |
 
-### `queue`
+### `queue_items`
 
-Queue items for ordered processing.
+Work items for the queue processor (`lib/queue.ts`, polled by `lib/crons.ts`).
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | uuid | Primary key |
-| `lead_id` | uuid | FK to leads |
-| `queue_name` | text | verify, build, deploy, call, followup, close |
-| `status` | text | pending, processing, completed, failed |
-| `priority` | integer | Lower = higher priority |
-| `metadata` | jsonb | Extra context (retry counts, errors) |
-| `pipeline_run_id` | uuid | FK to pipeline_runs |
-| `created_at` | timestamptz | When queued |
-| `started_at` | timestamptz | When processing began |
-| `completed_at` | timestamptz | When finished |
+| `lead_id` | uuid | FK to `leads` (cascade delete) |
+| `pipeline_run_id` | uuid | FK to `pipeline_runs` |
+| `queue_name` | text | verify, copywrite, build, seo, review, deploy, call, followup, close |
+| `priority` | integer | Higher = processed first |
+| `scheduled_at` | timestamptz | Reserved for delayed items |
+| `status` | text | pending, pending_approval, approved, processing, completed, failed |
+| `attempts` | integer | Incremented on failure |
+| `error` | text | Last failure message |
+| `metadata` | jsonb | Extra context (review attempt, errors) |
+| `created_at` / `updated_at` | timestamptz | Timestamps |
+
+HITL queues insert as `pending_approval` and are moved to `approved` by the Telegram bot or `/admin/queue-items/:id/approve`.
 
 ### `agent_logs`
 
-Activity log for all agent actions.
+Activity log written by `agentLog()`; the dashboard SSE feed reads the latest rows.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | uuid | Primary key |
-| `agent` | text | Agent name (scout, builder, caller, etc.) |
-| `message` | text | Log message |
+| `lead_id` | uuid | FK to `leads` (optional) |
+| `pipeline_run_id` | uuid | FK to `pipeline_runs` (optional) |
+| `agent` | text | Agent name (scout, builder, orchestrator, cron, ...) |
 | `level` | text | info, success, warn, error |
-| `lead_id` | uuid | FK to leads (optional) |
+| `message` | text | Log message |
 | `metadata` | jsonb | Extra context |
-| `pipeline_run_id` | uuid | FK to pipeline_runs |
 | `created_at` | timestamptz | Timestamp |
 
 ### `pipeline_runs`
 
-Tracks batch pipeline executions.
+One row per scout batch.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | uuid | Primary key |
-| `query` | text | Search query used |
+| `query` | text | Business type searched |
 | `location` | text | Geographic target |
-| `status` | text | running, completed, failed |
-| `leads_found` | integer | Number of leads discovered |
-| `created_at` | timestamptz | When started |
-| `completed_at` | timestamptz | When finished |
+| `leads_found` | integer | Leads discovered by scout |
+| `leads_processed` | integer | Leads processed |
+| `started_at` | timestamptz | When started (code orders by this) |
+| `completed_at` | timestamptz | When scouting finished |
 
-### `queue_state`
+### `system_config`
 
-Tracks whether each queue is active or paused.
+Runtime configuration as key/JSON pairs. Rows are seeded by the schema and **must exist**: the API updates them in place and does not insert.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `queue_name` | text | Primary key |
-| `state` | text | active or paused |
-| `updated_at` | timestamptz | Last state change |
+| Key | Value shape |
+|-----|-------------|
+| `queue_states` | `{ [queueName]: "active" \| "paused" }` |
+| `hitl_config` | `{ [queueName]: "auto" \| "hitl" }` (defaults: call and close are `hitl`) |
+| `concurrency` | `{ [queueName]: number }` max parallel workers per queue |
+| `business_hours` | `{ start, end, days: number[], timezone }` applied to call and close queues |
+| `worker_names` | `{ [workerKey]: displayName }` dashboard labels |
 
-## Setup SQL
-
-Run this in your Supabase SQL editor to create the schema:
-
-```sql
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
--- Pipeline runs
-CREATE TABLE pipeline_runs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  query TEXT,
-  location TEXT,
-  status TEXT DEFAULT 'running',
-  leads_found INTEGER DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  completed_at TIMESTAMPTZ
-);
-
--- Leads
-CREATE TABLE leads (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name TEXT NOT NULL,
-  category TEXT,
-  address TEXT,
-  phone TEXT,
-  email TEXT,
-  contact_name TEXT,
-  status TEXT DEFAULT 'discovered',
-  status_updated_at TIMESTAMPTZ DEFAULT NOW(),
-  google_rating NUMERIC,
-  google_review_count INTEGER,
-  viability_score INTEGER,
-  creative_brief JSONB,
-  vercel_deployment_url TEXT,
-  vercel_project_id TEXT,
-  email_sent_at TIMESTAMPTZ,
-  call_id TEXT,
-  call_completed_at TIMESTAMPTZ,
-  call_outcome TEXT,
-  demo_booked_at TIMESTAMPTZ,
-  calendly_event_url TEXT,
-  stripe_session_id TEXT,
-  paid_at TIMESTAMPTZ,
-  amount_paid NUMERIC,
-  domain TEXT,
-  needs_domain BOOLEAN DEFAULT FALSE,
-  needs_email BOOLEAN DEFAULT FALSE,
-  cta_type TEXT,
-  cta_value TEXT,
-  requested_changes TEXT,
-  error TEXT,
-  pipeline_run_id UUID REFERENCES pipeline_runs(id),
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Queue
-CREATE TABLE queue (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  lead_id UUID REFERENCES leads(id),
-  queue_name TEXT NOT NULL,
-  status TEXT DEFAULT 'pending',
-  priority INTEGER DEFAULT 0,
-  metadata JSONB DEFAULT '{}',
-  pipeline_run_id UUID REFERENCES pipeline_runs(id),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ
-);
-
--- Agent logs
-CREATE TABLE agent_logs (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  agent TEXT NOT NULL,
-  message TEXT NOT NULL,
-  level TEXT DEFAULT 'info',
-  lead_id UUID REFERENCES leads(id),
-  metadata JSONB DEFAULT '{}',
-  pipeline_run_id UUID REFERENCES pipeline_runs(id),
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Queue state
-CREATE TABLE queue_state (
-  queue_name TEXT PRIMARY KEY,
-  state TEXT DEFAULT 'active',
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Initialize queue states
-INSERT INTO queue_state (queue_name, state) VALUES
-  ('verify', 'active'),
-  ('build', 'active'),
-  ('deploy', 'active'),
-  ('call', 'active'),
-  ('followup', 'active'),
-  ('close', 'active');
-
--- Indexes
-CREATE INDEX idx_leads_status ON leads(status);
-CREATE INDEX idx_leads_pipeline_run ON leads(pipeline_run_id);
-CREATE INDEX idx_queue_name_status ON queue(queue_name, status);
-CREATE INDEX idx_queue_lead ON queue(lead_id);
-CREATE INDEX idx_logs_agent ON agent_logs(agent);
-CREATE INDEX idx_logs_lead ON agent_logs(lead_id);
-CREATE INDEX idx_logs_created ON agent_logs(created_at DESC);
-
--- Enable realtime
-ALTER PUBLICATION supabase_realtime ADD TABLE leads;
-ALTER PUBLICATION supabase_realtime ADD TABLE queue;
-ALTER PUBLICATION supabase_realtime ADD TABLE agent_logs;
-```
+Edit via the dashboard config panel, the Telegram bot, or `POST /admin/config`.
