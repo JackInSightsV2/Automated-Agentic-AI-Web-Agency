@@ -26,8 +26,8 @@ describe('inferOutcome', () => {
     expect(inferOutcome('They said no thank you, already have a website')).toBe('not_interested')
   })
 
-  test('"declined the offer" → no_answer (unrecognized negative)', () => {
-    expect(inferOutcome('The client declined the offer politely')).toBe('no_answer')
+  test('"declined the offer" → not_interested', () => {
+    expect(inferOutcome('The client declined the offer politely')).toBe('not_interested')
   })
 
   test('ambiguous text → no_answer', () => {
@@ -36,6 +36,30 @@ describe('inferOutcome', () => {
 
   test('empty string → no_answer', () => {
     expect(inferOutcome('')).toBe('no_answer')
+  })
+
+  // Regression: "not interested" contains "interested" and used to classify as interested
+  test('"not interested" → not_interested, never interested', () => {
+    expect(inferOutcome('The owner said they were not interested in a website')).toBe('not_interested')
+    expect(inferOutcome('Not interested. Asked us to send nothing.')).toBe('not_interested')
+    expect(inferOutcome("They don't need a site, they already have a website")).toBe('not_interested')
+  })
+
+  test('voicemail beats a stray "send" in the summary', () => {
+    expect(inferOutcome('Left a voicemail saying we would send the link by text')).toBe('voicemail')
+  })
+
+  test('"yes" only counts when nothing negative is present', () => {
+    expect(inferOutcome('They said yes at first but then said no thanks, not right now')).toBe('not_interested')
+  })
+
+  test('Bland analysis.outcome wins over the summary', () => {
+    expect(inferOutcome('They love it', { outcome: 'not_interested' })).toBe('not_interested')
+    expect(inferOutcome('', { outcome: 'INTERESTED ' })).toBe('interested')
+  })
+
+  test('invalid analysis.outcome falls back to the summary', () => {
+    expect(inferOutcome('Left message on answering machine', { outcome: 'banana' })).toBe('voicemail')
   })
 })
 
@@ -79,6 +103,21 @@ describe('extractContactInfo', () => {
       { user: 'assistant', text: 'You can reach us at info@agency.com' },
     ]
     const result = extractContactInfo(transcripts)
+    expect(result.email).toBeUndefined()
+  })
+
+  test('prefers Bland analysis fields when present and sane', () => {
+    const result = extractContactInfo([], { contact_name: 'Priya', email: 'Priya@Shop.co.uk' })
+    expect(result.contactName).toBe('Priya')
+    expect(result.email).toBe('priya@shop.co.uk')
+  })
+
+  test('ignores junk analysis values', () => {
+    const result = extractContactInfo(
+      [{ user: 'assistant', text: 'Nice to meet you Tom!' }],
+      { contact_name: 'the owner of the shop', email: 'not-an-email' },
+    )
+    expect(result.contactName).toBe('Tom')
     expect(result.email).toBeUndefined()
   })
 })

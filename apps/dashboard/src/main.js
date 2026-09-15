@@ -48,6 +48,23 @@ function disconnectSSE() {
 }
 
 // --- Work day control ---
+
+// All queues, in pipeline order. Asked from the API so this never drifts
+// from packages/api/src/types.ts; the fallback is only for when that call fails.
+const FALLBACK_QUEUE_NAMES = ['verify', 'copywrite', 'build', 'seo', 'review', 'deploy', 'call', 'followup', 'close']
+
+async function getQueueNames() {
+  try {
+    const res = await fetch('/admin/queues')
+    if (!res.ok) throw new Error(res.statusText)
+    const data = await res.json()
+    const names = (data.queues || []).map(q => q.name).filter(Boolean)
+    return names.length ? names : FALLBACK_QUEUE_NAMES
+  } catch {
+    return FALLBACK_QUEUE_NAMES
+  }
+}
+
 async function startWorkDay() {
   // Set workday FIRST so any render that follows sees it
   workdayActive = true
@@ -63,8 +80,7 @@ async function startWorkDay() {
   // Resume all queues
   if (apiRunning) {
     try {
-      const queues = ['verify', 'build', 'deploy', 'call', 'followup', 'close']
-      for (const q of queues) {
+      for (const q of await getQueueNames()) {
         await fetch(`/admin/queues/${q}/resume`, { method: 'POST' })
       }
     } catch (e) {
@@ -87,8 +103,7 @@ async function finishWorkDay() {
   // Pause all queues
   if (apiRunning) {
     try {
-      const queues = ['verify', 'build', 'deploy', 'call', 'followup', 'close']
-      for (const q of queues) {
+      for (const q of await getQueueNames()) {
         await fetch(`/admin/queues/${q}/pause`, { method: 'POST' })
       }
     } catch (e) {

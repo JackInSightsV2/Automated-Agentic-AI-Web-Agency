@@ -12,9 +12,11 @@ mock.module('../../lib/logger', () => ({
 }))
 
 describe('queue operations', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     installSupabaseMock()
     store._reset()
+    const { clearConfigCache } = await import('../../lib/queue')
+    clearConfigCache()
 
     // Seed system config
     store._seed('system_config', [
@@ -105,5 +107,73 @@ describe('queue operations', () => {
     const updated = store._get('queue_items').find(i => i.id === item.id)
     expect(updated?.status).toBe('failed')
     expect(updated?.error).toBe('Something went wrong')
+  })
+
+  test('getQueueStats aggregates every queue from one query', async () => {
+    store._seed('queue_items', [
+      makeQueueItem({ queue_name: 'verify', status: 'pending' }),
+      makeQueueItem({ queue_name: 'verify', status: 'pending' }),
+      makeQueueItem({ queue_name: 'build', status: 'processing' }),
+      makeQueueItem({ queue_name: 'call', status: 'pending_approval' }),
+      makeQueueItem({ queue_name: 'seo', status: 'failed' }),
+      makeQueueItem({ queue_name: 'seo', status: 'completed' }), // not counted
+    ])
+
+    const { getQueueStats } = await import('../../lib/queue')
+    const stats = await getQueueStats()
+
+    expect(stats.verify.pending).toBe(2)
+    expect(stats.build.processing).toBe(1)
+    expect(stats.call.pending_approval).toBe(1)
+    expect(stats.seo.failed).toBe(1)
+    expect(stats.seo.pending).toBe(0)
+    // Every queue is present even with no items
+    expect(stats.copywrite).toEqual({ pending: 0, processing: 0, failed: 0, pending_approval: 0 })
+    expect(Object.keys(stats).length).toBe(9)
+  })
+
+  test('setQueueState invalidates the config cache', async () => {
+    const { getQueueStates, setQueueState } = await import('../../lib/queue')
+    expect((await getQueueStates()).build).toBe('active')
+    await setQueueState('build', 'paused')
+    expect((await getQueueStates()).build).toBe('paused')
+  })
+})
+
+describe('recoverStaleItems', () => {
+  beforeEach(async () => {
+    installSupabaseMock()
+    store._reset()
+    const { clearConfigCache } = await import('../../lib/queue')
+    clearConfigCache()
+  })
+
+  test('maxAge 0 (startup) fails every processing item', async () => {
+    const fresh = makeQueueItem({ queue_name: 'build', status: 'processing', updated_at: new Date().toISOString() })
+    const pending = makeQueueItem({ queue_name: 'build', status: 'pending' })
+    store._seed('queue_items', [fresh, pending])
+
+    const { recoverStaleItems } = await import('../../lib/queue')
+    const recovered = await recoverStaleItems(0)
+
+    expect(recovered.map(i => i.id)).toEqual([fresh.id])
+    const items = store._get('queue_items')
+    expect(items.find(i => i.id === fresh.id)?.status).toBe('failed')
+    expect(items.find(i => i.id === fresh.id)?.error).toContain('restarted')
+    expect(items.find(i => i.id === pending.id)?.status).toBe('pending')
+  })
+
+  test('only items older than maxAge are failed', async () => {
+    const old = makeQueueItem({ queue_name: 'seo', status: 'processing', updated_at: new Date(Date.now() - 45 * 60000).toISOString() })
+    const recent = makeQueueItem({ queue_name: 'seo', status: 'processing', updated_at: new Date(Date.now() - 5 * 60000).toISOString() })
+    store._seed('queue_items', [old, recent])
+
+    const { recoverStaleItems } = await import('../../lib/queue')
+    const recovered = await recoverStaleItems(30 * 60000)
+
+    expect(recovered.map(i => i.id)).toEqual([old.id])
+    const items = store._get('queue_items')
+    expect(items.find(i => i.id === old.id)?.status).toBe('failed')
+    expect(items.find(i => i.id === recent.id)?.status).toBe('processing')
   })
 })

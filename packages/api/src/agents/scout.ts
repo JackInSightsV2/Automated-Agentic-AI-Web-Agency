@@ -12,6 +12,50 @@ interface Place {
   types?: string[]
 }
 
+/**
+ * Drop places that are already leads. A business already in the pipeline
+ * (or already a paying customer) must never be re-inserted: the old upsert
+ * reset its status to `discovered` and re-queued it for verification.
+ */
+async function filterKnownPlaces(places: Place[], tag: string, runId: string): Promise<Place[]> {
+  if (places.length === 0) return places
+
+  const { data: existing } = await supabase
+    .from('leads')
+    .select('google_place_id')
+    .in('google_place_id', places.map(p => p.id))
+
+  const known = new Set((existing || []).map((l: { google_place_id: string | null }) => l.google_place_id))
+  const fresh = places.filter(p => !known.has(p.id))
+
+  if (fresh.length < places.length) {
+    await agentLog('scout', `${tag}Skipping ${places.length - fresh.length} place(s) already in the pipeline`, { runId })
+  }
+  return fresh
+}
+
+async function insertLead(place: Place, pipelineRunId: string): Promise<{ id: string } | { error: string }> {
+  const { data, error } = await supabase
+    .from('leads')
+    .insert({
+      name: place.displayName.text,
+      category: place.types?.[0]?.replace(/_/g, ' ') || 'local business',
+      address: place.formattedAddress,
+      phone: place.nationalPhoneNumber,
+      google_place_id: place.id,
+      google_rating: place.rating || null,
+      google_review_count: place.userRatingCount || null,
+      website_detected: place.websiteUri || null,
+      status: 'discovered',
+      pipeline_run_id: pipelineRunId,
+    })
+    .select('id')
+    .single()
+
+  if (error || !data) return { error: error?.message || 'insert returned no row' }
+  return { id: data.id }
+}
+
 async function runMockScout(query: string, pipelineRunId: string, limit = 3): Promise<string[]> {
   await agentLog('scout', `[MOCK] Searching: ${query}`, { runId: pipelineRunId })
 
@@ -30,47 +74,24 @@ async function runMockScout(query: string, pipelineRunId: string, limit = 3): Pr
     places = mockData.places || []
   }
 
-  // Exclude places already in DB as leads
-  const { data: existingLeads } = await supabase
-    .from('leads')
-    .select('google_place_id')
-  const existingIds = new Set((existingLeads || []).map((l: any) => l.google_place_id))
-  places = places.filter((p) => !existingIds.has(p.id))
-
+  places = await filterKnownPlaces(places, '[MOCK] ', pipelineRunId)
   places = places.slice(0, limit)
 
-  await agentLog('scout', `[MOCK] Found ${places.length} new leads (limit: ${limit}), upserting...`, { runId: pipelineRunId })
+  await agentLog('scout', `[MOCK] Found ${places.length} new leads (limit: ${limit}), inserting...`, { runId: pipelineRunId })
 
   const leadIds: string[] = []
 
   for (const place of places) {
     if (!place.nationalPhoneNumber) continue
 
-    const { data, error } = await supabase
-      .from('leads')
-      .upsert({
-        name: place.displayName.text,
-        category: place.types?.[0]?.replace(/_/g, ' ') || 'local business',
-        address: place.formattedAddress,
-        phone: place.nationalPhoneNumber,
-        google_place_id: place.id,
-        google_rating: place.rating || null,
-        google_review_count: place.userRatingCount || null,
-        website_detected: null,
-        status: 'discovered',
-        pipeline_run_id: pipelineRunId,
-      }, { onConflict: 'google_place_id' })
-      .select('id')
-      .single()
-
-    if (error) {
-      await agentLog('scout', `[MOCK] Failed to save ${place.displayName.text}: ${error.message}`, {
+    const result = await insertLead(place, pipelineRunId)
+    if ('error' in result) {
+      await agentLog('scout', `[MOCK] Failed to save ${place.displayName.text}: ${result.error}`, {
         runId: pipelineRunId, level: 'error',
       })
       continue
     }
-
-    leadIds.push(data.id)
+    leadIds.push(result.id)
   }
 
   await agentLog('scout', `[MOCK] Scouting complete: ${leadIds.length} leads`, {
@@ -108,10 +129,17 @@ export async function runScoutAgent(query: string, pipelineRunId: string, limit 
     })
   })
 
+  if (!searchRes.ok) {
+    const body = await searchRes.text()
+    throw new Error(`Google Places search failed (${searchRes.status}): ${body.slice(0, 300)}`)
+  }
+
   const searchData = await searchRes.json() as { places?: Place[] }
-  const places = searchData.places || []
+  let places = searchData.places || []
 
   await agentLog('scout', `Found ${places.length} places, filtering...`, { runId: pipelineRunId })
+
+  places = await filterKnownPlaces(places, '', pipelineRunId)
 
   const leadIds: string[] = []
 
@@ -130,33 +158,16 @@ export async function runScoutAgent(query: string, pipelineRunId: string, limit 
       continue
     }
 
-    // Upsert to Supabase
-    const { data, error } = await supabase
-      .from('leads')
-      .upsert({
-        name: place.displayName.text,
-        category: place.types?.[0]?.replace(/_/g, ' ') || 'local business',
-        address: place.formattedAddress,
-        phone: place.nationalPhoneNumber,
-        google_place_id: place.id,
-        google_rating: place.rating || null,
-        google_review_count: place.userRatingCount || null,
-        website_detected: null,
-        status: 'discovered',
-        pipeline_run_id: pipelineRunId
-      }, { onConflict: 'google_place_id' })
-      .select('id')
-      .single()
-
-    if (error) {
-      await agentLog('scout', `Failed to save ${place.displayName.text}: ${error.message}`, {
+    const result = await insertLead(place, pipelineRunId)
+    if ('error' in result) {
+      await agentLog('scout', `Failed to save ${place.displayName.text}: ${result.error}`, {
         runId: pipelineRunId,
         level: 'error'
       })
       continue
     }
 
-    leadIds.push(data.id)
+    leadIds.push(result.id)
     await agentLog('scout', `Found lead: ${place.displayName.text} (${place.nationalPhoneNumber})`, {
       runId: pipelineRunId,
       level: 'success'

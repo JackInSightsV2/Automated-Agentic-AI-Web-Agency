@@ -36,6 +36,7 @@ function applyFilters(rows: Row[], filters: Filter[]): Row[] {
     filters.every(f => {
       switch (f.type) {
         case 'eq': return row[f.col] === f.val
+        case 'is': return f.val === null ? (row[f.col] === null || row[f.col] === undefined) : row[f.col] === f.val
         case 'neq': return row[f.col] !== f.val
         case 'in': return Array.isArray(f.val) && f.val.includes(row[f.col])
         case 'ilike': {
@@ -143,6 +144,7 @@ function makeChain(
       return chain
     },
     eq(col: string, val: unknown) { filters.push({ type: 'eq', col, val }); return chain },
+    is(col: string, val: unknown) { filters.push({ type: 'is', col, val }); return chain },
     neq(col: string, val: unknown) { filters.push({ type: 'neq', col, val }); return chain },
     in(col: string, val: unknown[]) { filters.push({ type: 'in', col, val }); return chain },
     ilike(col: string, val: string) { filters.push({ type: 'ilike', col, val }); return chain },

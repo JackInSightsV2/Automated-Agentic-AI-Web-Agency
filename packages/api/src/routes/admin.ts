@@ -6,11 +6,10 @@ import {
   getHITLConfig,
   getQueueStates,
 } from '../lib/queue'
+import { QUEUE_NAMES } from '../types'
 import type { QueueName } from '../types'
 
 export const adminRouter = new Hono()
-
-const QUEUE_NAMES: QueueName[] = ['verify', 'copywrite', 'build', 'seo', 'review', 'deploy', 'call', 'followup', 'close']
 
 // Queue stats
 adminRouter.get('/queues', async (c) => {

@@ -1,5 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api'
 import { supabase } from './supabase'
+import { QUEUE_NAMES } from '../types'
 import type { QueueItem, Lead, QueueName } from '../types'
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN!, { polling: true })
@@ -260,16 +261,14 @@ bot.onText(/\/stats/, async (msg) => {
 bot.onText(/\/pause$/, async (msg) => {
   if (msg.chat.id !== ADMIN_ID) return
   const { setQueueState } = await import('./queue')
-  const queues: QueueName[] = ['verify', 'build', 'deploy', 'call', 'followup', 'close']
-  for (const q of queues) await setQueueState(q, 'paused')
+  for (const q of QUEUE_NAMES) await setQueueState(q, 'paused')
   await bot.sendMessage(ADMIN_ID, '⏸️ All queues paused. Use /resume to restart.')
 })
 
 bot.onText(/\/resume$/, async (msg) => {
   if (msg.chat.id !== ADMIN_ID) return
   const { setQueueState } = await import('./queue')
-  const queues: QueueName[] = ['verify', 'build', 'deploy', 'call', 'followup', 'close']
-  for (const q of queues) await setQueueState(q, 'active')
+  for (const q of QUEUE_NAMES) await setQueueState(q, 'active')
   await bot.sendMessage(ADMIN_ID, '▶️ All queues resumed.')
 })
 

@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
+import { leadSlug } from '../lib/slug'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync, } from 'node:fs'
 import { join, sep } from 'node:path'
@@ -23,7 +24,7 @@ export async function runBuilderAgent(leadId: string): Promise<string> {
 
   await agentLog('builder', `Building Vite site for: ${lead.name}`, { leadId })
 
-  const slug = lead.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+$/, '').slice(0, 40)
+  const slug = leadSlug(lead.name)
 
   // Parse creative brief if available
   let briefSection = ''

@@ -4,6 +4,7 @@ import { agentLog } from '../lib/logger'
 import { notify } from '../lib/telegram'
 import { runCloserAgent, pollClosingCall } from '../agents/closer'
 import { runDeliveryPipeline } from '../agents/delivery'
+import { markLeadPaid } from '../lib/payments'
 import { createCheckoutLink, verifyWebhookSignature } from '../lib/stripe'
 import { rateLimit } from '../lib/rate-limit'
 import { agency } from '../lib/config'
@@ -164,38 +165,9 @@ async function handleStripeEvent(event: any) {
   const leadId = session?.metadata?.lead_id
   if (!leadId) return
 
-  const { data: lead } = await supabase
-    .from('leads')
-    .select('id, name, status, paid_at, contact_name')
-    .eq('id', leadId)
-    .single()
-
-  if (!lead || lead.paid_at || lead.status !== 'spec_sent') return
-
-  const contactName = lead.contact_name || lead.name.split(' ')[0]
-  const amountTotal = (session.amount_total || 0) / 100
-
-  await supabase.from('leads').update({
-    status: 'paid',
-    status_updated_at: new Date().toISOString(),
-    paid_at: new Date().toISOString(),
-  }).eq('id', leadId)
-
-  await agentLog('stripe', `Webhook: payment received for ${lead.name}: £${amountTotal}`, {
-    leadId,
-    level: 'success'
-  })
-
-  await notify(
-    `Payment received (webhook) from ${contactName} (${lead.name}) — £${amountTotal}!\n\n` +
-    `Starting delivery pipeline...`
-  )
-
-  runDeliveryPipeline(leadId).catch(async (err) => {
-    await agentLog('delivery', `Delivery pipeline failed for ${lead.name}: ${String(err)}`, {
-      leadId, level: 'error'
-    })
-  })
+  // Conditional on status = spec_sent, so the 60s poller and this webhook
+  // cannot both start delivery for the same payment.
+  await markLeadPaid(leadId, { source: 'stripe-webhook', amount: (session.amount_total || 0) / 100 })
 }
 
 // Mark as paid (manual trigger) and start delivery
@@ -204,37 +176,15 @@ closingRouter.post('/paid/:leadId', async (c) => {
 
   const { data: lead } = await supabase
     .from('leads')
-    .select('name, contact_name, desired_domain, needs_domain, needs_email_setup, cta_type, cta_value, requested_changes, total_price, vercel_deployment_url')
+    .select('id, paid_at')
     .eq('id', leadId)
     .single()
 
   if (!lead) return c.json({ error: 'Lead not found' }, 404)
+  if (lead.paid_at) return c.json({ error: 'Lead is already marked paid' }, 409)
 
-  const contactName = lead.contact_name || lead.name.split(' ')[0]
-
-  await supabase.from('leads').update({
-    status: 'paid',
-    status_updated_at: new Date().toISOString(),
-    paid_at: new Date().toISOString()
-  }).eq('id', leadId)
-
-  await notify(
-    `Payment received from ${contactName} (${lead.name}) — £${lead.total_price}!\n\n` +
-    `Domain: ${lead.desired_domain || (lead.needs_domain ? 'Needs registration' : 'TBC')}\n` +
-    `Changes: ${lead.requested_changes || 'None'}\n\n` +
-    `Starting delivery pipeline...`
-  )
-
-  await agentLog('closer', `Payment received for ${lead.name}: £${lead.total_price}`, {
-    leadId, level: 'success'
-  })
-
-  // Trigger delivery pipeline: apply changes → SEO → review → deploy
-  runDeliveryPipeline(leadId).catch(async (err) => {
-    await agentLog('delivery', `Delivery pipeline failed for ${lead.name}: ${String(err)}`, {
-      leadId, level: 'error'
-    })
-  })
+  const done = await markLeadPaid(leadId, { source: 'manual', force: true })
+  if (!done) return c.json({ error: 'Lead was marked paid by another process' }, 409)
 
   return c.json({ success: true, message: 'Paid — delivery pipeline started' })
 })
