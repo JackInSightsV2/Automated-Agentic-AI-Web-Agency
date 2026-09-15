@@ -16,6 +16,17 @@ export const agency = {
 }
 
 /**
+ * Hero image generation (OpenAI Images API). Set OPENAI_API_KEY to enable;
+ * without it the SEO step keeps the builder's CSS gradient hero.
+ */
+export const images = {
+  get enabled(): boolean { return !!process.env.OPENAI_API_KEY && process.env.HERO_IMAGES !== 'false' },
+  get model(): string { return process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-flare' },
+  get quality(): string { return process.env.OPENAI_IMAGE_QUALITY || 'medium' },
+  get size(): string { return process.env.OPENAI_IMAGE_SIZE || '1536x1024' },
+}
+
+/**
  * If DEMO_PHONE is set, all outbound calls go to that number instead of the lead's.
  * Used for testing/demo — remove in production.
  */

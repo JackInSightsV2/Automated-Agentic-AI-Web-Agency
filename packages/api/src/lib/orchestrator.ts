@@ -30,7 +30,7 @@ const PROFILES: Record<JobProfile, { maxTurns: number; model?: string }> = {
   analyst:    { maxTurns: 10, model: 'sonnet' },
   delivery:   { maxTurns: 10, model: 'sonnet' },
   copywriter: { maxTurns: 5,  model: 'sonnet' },
-  seo:        { maxTurns: 15 },
+  seo:        { maxTurns: 12 }, // no longer generates the hero image itself
   reviewer:   { maxTurns: 5,  model: 'sonnet' },
 }
 
@@ -82,10 +82,6 @@ export async function runJob(job: Job): Promise<JobResult> {
     // Unset CLAUDECODE to allow nested sessions
     const env = { ...process.env }
     env.CLAUDECODE = undefined
-    // Ensure GEMINI_API_KEY is set for nano-banana skill
-    if (!env.GEMINI_API_KEY && env.NANOBANANA_GEMINI_API_KEY) {
-      env.GEMINI_API_KEY = env.NANOBANANA_GEMINI_API_KEY
-    }
 
     const proc = spawn('claude', args, {
       cwd: jobDir,

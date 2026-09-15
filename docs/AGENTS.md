@@ -35,10 +35,11 @@ The system uses 15 specialized AI agents, each handling one step of the pipeline
 - **Output:** Pass/fail with feedback (failed sites get re-queued for rebuild, max 3 attempts)
 
 ## SEO Agent
-- **File:** `packages/api/src/agents/seo.ts`
-- **Purpose:** Optimizes the website for search engines (meta tags, structured data, etc.)
+- **File:** `packages/api/src/agents/seo.ts` (hero image: `packages/api/src/lib/images.ts`)
+- **Purpose:** Generates a hero background image via the OpenAI Images API (in Bun, before the Claude Code job), then has Claude Code wire it into the CSS and add meta tags, Open Graph, LocalBusiness JSON-LD, sitemap and robots.txt. Site URLs are written as `__SITE_URL__` and stamped by the deployer.
 - **Input:** Built website
-- **Output:** SEO-optimized website
+- **Output:** SEO-optimized website with `public/hero.webp` (or the gradient hero if no `OPENAI_API_KEY`)
+- **Config:** `OPENAI_API_KEY`, `OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_QUALITY`, `OPENAI_IMAGE_SIZE`, `HERO_IMAGES`
 
 ## Deployer Agent
 - **File:** `packages/api/src/agents/deployer.ts`
