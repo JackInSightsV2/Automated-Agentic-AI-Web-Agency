@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
 import { runJob } from '../lib/orchestrator'
 import { leadSlug } from '../lib/slug'
+import { generateHeroImage } from '../lib/images'
 import { SITE_URL_PLACEHOLDER } from './deployer'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync } from 'node:fs'
@@ -55,7 +56,23 @@ export async function runSeoAgent(leadId: string): Promise<void> {
   // placeholder in every text file before building.
   const siteUrl = `https://${SITE_URL_PLACEHOLDER}/`
 
-  const prompt = `You are an expert SEO specialist. Optimize this existing website for search engines AND generate a hero background image.
+  // Generate the hero image here (OpenAI Images API) rather than inside the
+  // Claude Code job, so the model only has to wire an existing file into CSS.
+  const heroPath = await generateHeroImage(lead, jobDir)
+
+  const heroStep = heroPath
+    ? `## STEP 1: Wire in the hero image
+
+A hero background image has already been generated at ${heroPath} (1536x1024 landscape, WebP). Do NOT generate, download, or replace it.
+
+Update the CSS hero section to use background-image: url('/hero.webp') with a dark overlay gradient so headline text stays readable. Look for the .hero-bg class or the hero section styling. Use background-size: cover and background-position: center. Keep the existing gradient as the fallback layer beneath the image.`
+    : `## STEP 1: Hero image
+
+No hero image is available for this site. Keep the existing CSS gradient hero exactly as it is. Do NOT try to generate, fetch, or reference any image file.`
+
+  const prompt = `You are an expert SEO specialist. Optimize this existing website for search engines.
+
+IMPORTANT: Do NOT use any skills or slash commands. Edit the files directly.
 
 Business Details:
 - Name: ${lead.name}
@@ -69,17 +86,7 @@ The website files are in the current directory. This is a Vite project.
 The site's public URL is not known yet. Wherever a URL for the site itself is needed, write EXACTLY this placeholder and nothing else: ${siteUrl}
 It will be replaced with the real address automatically at deploy time. Do NOT invent a domain.
 
-## STEP 1: Generate hero image
-
-Use the /nano-banana skill to generate a professional hero background image for a ${lead.category} business called "${lead.name}". The image should look like a high-quality stock photo suitable for a website hero section.
-
-After generating, copy the image to the public directory:
-  mkdir -p public
-  cp nanobanana-output/*.webp public/hero.webp 2>/dev/null || cp nanobanana-output/*.png public/hero.webp 2>/dev/null
-
-Then update the CSS hero section to use background-image: url('/hero.webp') with a dark overlay gradient for text readability. Look for the .hero-bg class or the hero section styling.
-
-If nano-banana fails, skip this step — the existing CSS gradient fallback is fine.
+${heroStep}
 
 ## STEP 2: SEO optimizations
 
@@ -140,9 +147,9 @@ Edit files in place. Do NOT run any build commands.`
     status_updated_at: new Date().toISOString()
   }).eq('id', leadId)
 
-  await agentLog('seo', `SEO optimization complete for ${lead.name}`, {
+  await agentLog('seo', `SEO optimization complete for ${lead.name}${heroPath ? ' (with hero image)' : ' (gradient hero)'}`, {
     leadId,
     level: 'success',
-    metadata: { files: Object.keys(result.files) }
+    metadata: { files: Object.keys(result.files), heroImage: heroPath }
   })
 }

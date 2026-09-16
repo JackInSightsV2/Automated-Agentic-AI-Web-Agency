@@ -7,7 +7,6 @@ Step-by-step guide to get the Automated Agentic AI Web Agency running.
 - [Bun](https://bun.sh) v1.0+ (runtime)
 - [Node.js](https://nodejs.org) v18+ (for some tools)
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (the builder, SEO, delivery, and copywriter agents spawn Claude Code as a subprocess)
-- [Gemini CLI](https://github.com/google-gemini/gemini-cli) (used by the Nano Banana skill for AI image generation)
 
 ## 1. Supabase Setup
 
@@ -63,23 +62,22 @@ Step-by-step guide to get the Automated Agentic AI Web Agency running.
 3. Create an API key -> `GOOGLE_PLACES_API_KEY`
 4. (Optional) Set `MOCK_SCOUT=true` to run the pipeline against bundled sample businesses without a Google key
 
-## 8. Gemini CLI + Nano Banana (Image Generation)
+## 8. OpenAI (Hero Image Generation, optional)
 
-The SEO agent uses the **Nano Banana** skill (via Gemini CLI) to generate hero images for websites.
+Before the SEO step, the API server generates a photographic hero background for each site with the [OpenAI Images API](https://developers.openai.com/api/docs/guides/image-generation) and saves it as `public/hero.webp`. The SEO agent then wires it into the CSS. If no key is set, or generation fails, the site keeps the builder's CSS gradient hero.
 
-### Install Gemini CLI
-```bash
-npm install -g @anthropic-ai/gemini-cli   # or see https://github.com/google-gemini/gemini-cli
-```
+1. Create an API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys) -> `OPENAI_API_KEY`
+2. GPT Image models may require [organisation verification](https://platform.openai.com/settings/organization/general) in the OpenAI console before they return images. If generation fails with a verification error, complete that once.
+3. Optional tuning in `.env`:
 
-### Get a Gemini API Key
-1. Go to [Google AI Studio](https://aistudio.google.com)
-2. Create an API key -> `GEMINI_API_KEY`
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `OPENAI_IMAGE_MODEL` | `gpt-image-2.5-flare` | `gpt-image-2.5-sunburst` for more detail, `gpt-image-1-mini` for a quarter of the cost |
+| `OPENAI_IMAGE_QUALITY` | `medium` | `low` / `medium` / `high` / `xhigh` / `max`. Roughly $0.01 to $0.20 per image |
+| `OPENAI_IMAGE_SIZE` | `1536x1024` | Any `WIDTHxHEIGHT` in multiples of 16, up to 3:1 |
+| `HERO_IMAGES` | `true` | `false` disables generation even with a key set |
 
-### Nano Banana Skill
-The skill is already included at `.gemini/skills/nanobanana-imaging/SKILL.md`. It provides MCP tools for image generation, editing, and restoration. The SEO agent calls `/nano-banana` within Claude Code to generate hero background images for each website.
-
-No additional setup needed -- as long as `GEMINI_API_KEY` is set, the skill works automatically when Claude Code spawns subprocess jobs.
+Cost is token-metered; a `medium` landscape hero is typically 5 to 8 cents. Every generation is logged to `agent_logs` with the model, quality, size, and usage.
 
 ## 9. MCP Servers
 
@@ -147,14 +145,6 @@ claude plugin install content-marketing
 claude plugin install business-analytics
 claude plugin install seo-technical-optimization
 ```
-
-### Standalone Skills
-
-| Skill | Location | Purpose |
-|-------|----------|---------|
-| `nano-banana` | `~/.claude/skills/nano-banana` | AI image generation via Gemini (hero images, icons, patterns) |
-
-The Nano Banana skill source is included in this repo at `.gemini/skills/nanobanana-imaging/`. The setup script copies it to `~/.claude/skills/nano-banana` automatically.
 
 ## 11. Calendly Setup
 
