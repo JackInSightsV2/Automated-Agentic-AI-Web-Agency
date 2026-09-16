@@ -64,6 +64,31 @@ describe('extractClosingDetails', () => {
     expect(extractClosingDetails([{ user: 'customer', text: 'Hmm.' }], '', { wants_to_go_ahead: 'true' }).wantsToGoAhead).toBe(true)
   })
 
+  test('Bland disposition_tag decides going ahead', () => {
+    expect(extractClosingDetails([{ user: 'customer', text: 'Hmm.' }], '', { disposition_tag: 'going_ahead' }).wantsToGoAhead).toBe(true)
+    expect(extractClosingDetails([{ user: 'customer', text: "Yes let's do it!" }], 'agreed to proceed', { disposition_tag: 'undecided' }).wantsToGoAhead).toBe(false)
+    expect(extractClosingDetails([], '', { disposition_tag: 'declined' }).wantsToGoAhead).toBe(false)
+  })
+
+  test('labelled summary lines (summary_prompt) are read before the regexes', () => {
+    const summary = 'DECISION: going ahead\nDOMAIN: bobsplumbing.co.uk\nEMAIL SETUP: no\nCTA: phone 07700 900123\nCHANGES: swap the hero photo for the van\nBob was keen and confirmed everything.'
+    const r = extractClosingDetails([{ user: 'customer', text: 'Alright.' }], summary)
+    expect(r.wantsToGoAhead).toBe(true)
+    expect(r.domain).toBe('bobsplumbing.co.uk')
+    expect(r.needsDomain).toBe(false)
+    expect(r.needsEmail).toBe(false)
+    expect(r.changes).toBe('swap the hero photo for the van')
+  })
+
+  test('labelled summary: needs registration + undecided', () => {
+    const summary = 'DECISION: undecided\nDOMAIN: needs registration\nEMAIL SETUP: yes\nCTA: none\nCHANGES: none\nWants to think about it.'
+    const r = extractClosingDetails([], summary)
+    expect(r.wantsToGoAhead).toBe(false)
+    expect(r.needsDomain).toBe(true)
+    expect(r.needsEmail).toBe(true)
+    expect(r.changes).toBeNull()
+  })
+
   test('Bland analysis fills domain, CTA, and changes', () => {
     const result = extractClosingDetails([], '', {
       wants_to_go_ahead: true,

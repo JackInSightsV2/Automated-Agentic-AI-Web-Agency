@@ -6,10 +6,8 @@ import { generateHeroImage } from '../lib/images'
 import { SITE_URL_PLACEHOLDER } from './deployer'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync } from 'node:fs'
-import { join, sep } from 'node:path'
-
-/** Filter that skips node_modules and .git when copying */
-const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')
+import { join } from 'node:path'
+import { skipInternal as skipNodeModules } from '../lib/fs'
 
 const PREVIEW_DIR = join(process.cwd(), 'preview')
 
@@ -72,7 +70,10 @@ No hero image is available for this site. Keep the existing CSS gradient hero ex
 
   const prompt = `You are an expert SEO specialist. Optimize this existing website for search engines.
 
-IMPORTANT: Do NOT use any skills or slash commands. Edit the files directly.
+Two subagents are available (Task tool). Use them in STEP 2, then apply their output yourself:
+- "seo-meta-optimizer": give it the business details and ask for the <title>, meta description, and Open Graph title/description, within character limits.
+- "seo-structure-architect": give it index.html and ask for the corrected heading hierarchy and the LocalBusiness JSON-LD.
+Do not use any skills or slash commands. Edit the files directly.
 
 Business Details:
 - Name: ${lead.name}

@@ -5,10 +5,8 @@ import { enqueue } from '../lib/queue'
 import { runJob } from '../lib/orchestrator'
 import { leadSlug } from '../lib/slug'
 import { existsSync, cpSync } from 'node:fs'
-import { join, sep } from 'node:path'
-
-/** Filter that skips node_modules and .git when copying */
-const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')
+import { join } from 'node:path'
+import { skipInternal as skipNodeModules } from '../lib/fs'
 
 /**
  * Apply requested changes to the website files using Claude Code.

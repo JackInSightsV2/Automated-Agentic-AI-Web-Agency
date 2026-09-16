@@ -79,72 +79,32 @@ Before the SEO step, the API server generates a photographic hero background for
 
 Cost is token-metered; a `medium` landscape hero is typically 5 to 8 cents. Every generation is logged to `agent_logs` with the model, quality, size, and usage.
 
-## 9. MCP Servers
+## 9. MCP Servers (interactive sessions only)
 
-The project configures three MCP (Model Context Protocol) servers that give Claude Code direct access to manage your services. These are configured in `.claude/mcp.json` and the setup script creates this automatically.
+`.mcp.json` at the repo root configures three MCP (Model Context Protocol) servers. They are available when you run Claude Code interactively inside this repo, which is handy during setup: Claude can create your Stripe products, run the Supabase schema, and configure Vercel through conversation. Each prompts you to authenticate in the browser on first use.
 
 | Server | URL | Purpose |
 |--------|-----|---------|
-| `stripe` | `https://mcp.stripe.com` | Manage Stripe products, prices, webhooks, and payment links |
-| `supabase` | `https://mcp.supabase.com/mcp` | Manage Supabase projects, tables, migrations, and RLS policies |
-| `vercel` | `https://mcp.vercel.com/mcp` | Manage Vercel deployments, domains, and environment variables |
+| `stripe` | `https://mcp.stripe.com` | Products, prices, webhooks, payment links |
+| `supabase` | `https://mcp.supabase.com/mcp` | Tables, migrations, RLS policies |
+| `vercel` | `https://mcp.vercel.com` | Deployments, domains, environment variables |
 
-These are especially useful during initial setup — Claude Code can help you create your Stripe products, set up your Supabase schema, and configure Vercel deployments directly through conversation.
+The subprocess jobs the agency runs (`claude -p`) cannot complete the OAuth flow and do not use these servers.
 
-Each server will prompt you to authenticate on first use via your browser.
+## 10. Claude Code Skills and Subagents
 
-## 10. Claude Code Skills + Plugins
+The agents spawn Claude Code as subprocesses via the orchestrator (`packages/api/src/lib/orchestrator.ts`) with `--dangerously-skip-permissions`, `--max-turns` (per profile) and `--output-format json`, in a fresh directory under `/tmp/webagency-jobs/`.
 
-The system's agents spawn Claude Code as subprocesses (via the orchestrator). The spawned sessions have access to any skills/plugins installed on the host machine. The `setup.sh` script handles all of this automatically, but here's the full breakdown.
+Because that directory is outside the repo, nothing installed as a plugin on your machine is guaranteed to be visible to a job. Instead, the skills and subagents each job needs are **vendored in the repo** at `packages/api/claude/` and the orchestrator copies them into the job's `.claude/` before spawning:
 
-### How it works
-The orchestrator (`packages/api/src/lib/orchestrator.ts`) spawns `claude` CLI with:
-- `--dangerously-skip-permissions` (required for autonomous operation)
-- `--max-turns` (varies by agent profile)
-- `--output-format json`
+| Profile | Staged assets | Referenced in the prompt as |
+|---------|---------------|-----------------------------|
+| builder | `frontend-design` skill | "use the Skill tool to load frontend-design" |
+| copywriter | `content-marketer` agent | "delegate to the content-marketer subagent" |
+| seo | `seo-meta-optimizer`, `seo-structure-architect` agents | subagent delegation |
+| reviewer | `code-reviewer`, `performance-engineer` agents | subagent delegation |
 
-### Plugin Marketplaces
-
-The following marketplaces must be registered before installing plugins:
-
-```bash
-claude plugin marketplace add mksglu/context-mode
-claude plugin marketplace add anthropics/claude-plugins-official
-claude plugin marketplace add wshobson/agents
-claude plugin marketplace add composiohq/awesome-claude-plugins
-claude plugin marketplace add paddo/claude-tools
-```
-
-### Plugins
-
-| Plugin | Marketplace | Purpose |
-|--------|-------------|---------|
-| `context-mode` | `mksglu/context-mode` | Context-aware mode switching |
-| `frontend-design` | `anthropics/claude-plugins-official` | Production-grade frontend interface generation |
-| `theme-factory` | `composiohq/awesome-claude-plugins` | Visual theme selection based on business type |
-| `canvas-design` | `composiohq/awesome-claude-plugins` | Canvas-based design generation |
-| `artifacts-builder` | `composiohq/awesome-claude-plugins` | Structured artifact creation |
-| `comprehensive-review` | `wshobson/agents` | In-depth code review workflows |
-| `security-scanning` | `wshobson/agents` | Security vulnerability scanning |
-| `application-performance` | `wshobson/agents` | Performance analysis and optimisation |
-| `content-marketing` | `wshobson/agents` | Content strategy research for businesses |
-| `business-analytics` | `wshobson/agents` | Business data analysis |
-| `seo-technical-optimization` | `wshobson/agents` | Technical SEO auditing and optimisation |
-
-Install all plugins:
-```bash
-claude plugin install context-mode
-claude plugin install frontend-design
-claude plugin install theme-factory
-claude plugin install canvas-design
-claude plugin install artifacts-builder
-claude plugin install comprehensive-review
-claude plugin install security-scanning
-claude plugin install application-performance
-claude plugin install content-marketing
-claude plugin install business-analytics
-claude plugin install seo-technical-optimization
-```
+Nothing to install. See `packages/api/claude/README.md` for where each file came from, its licence, and why other plugins were not adopted. To add an asset, drop it in that directory and reference it in `PROFILE_ASSETS`.
 
 ## 11. Calendly Setup
 

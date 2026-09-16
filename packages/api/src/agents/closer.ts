@@ -6,16 +6,18 @@ import { startCall, getCall, isCallFinished, isCallFailed } from '../lib/bland'
 import { createCheckoutLink } from '../lib/stripe'
 import { agency, pricing, getCallPhone } from '../lib/config'
 
-/** Structured fields we ask Bland to extract after the closing call (see lib/bland.ts). */
-const CLOSING_ANALYSIS_SCHEMA = {
-  wants_to_go_ahead: 'true only if the customer clearly agreed to buy the website; false if undecided, wants to think about it, or declined',
-  domain_name: 'Domain name the customer already owns (e.g. example.co.uk), or null',
-  needs_domain_registration: 'true if the customer has no domain and wants us to register one',
-  needs_email_setup: 'true if the customer wants a professional email address set up',
-  cta_type: 'How customers should contact them on the site: "phone" or "email_form", or null',
-  cta_value: 'The phone number or email address for the CTA, or null',
-  requested_changes: 'Any changes the customer asked for on the website, as a short sentence, or null',
-}
+/** Outcome tags Bland picks from after the closing call (returned as `disposition_tag`). */
+const CLOSING_DISPOSITIONS = ['going_ahead', 'undecided', 'declined', 'no_answer']
+
+/** Steers Bland's generated summary so extractClosingDetails has explicit facts to read. */
+const CLOSING_SUMMARY_PROMPT =
+  'Summarise the call in under 200 words using these exact labelled lines, one per line, writing "none" where not discussed: ' +
+  'DECISION: going ahead / undecided / declined. ' +
+  'DOMAIN: the domain the customer already owns, written exactly, or "needs registration", or none. ' +
+  'EMAIL SETUP: yes / no. ' +
+  'CTA: phone <number> or email form <address>. ' +
+  'CHANGES: the changes they asked for on the website, in one sentence. ' +
+  'Then one short paragraph of context.'
 
 /** A closing call that has not completed after this long is treated as unanswered. */
 export const CLOSING_CALL_TIMEOUT_MS = 45 * 60 * 1000
@@ -114,7 +116,8 @@ Style notes:
     max_duration: 8,
     wait_for_greeting: true,
     interruption_threshold: 500,
-    analysis_schema: CLOSING_ANALYSIS_SCHEMA,
+    dispositions: CLOSING_DISPOSITIONS,
+    summary_prompt: CLOSING_SUMMARY_PROMPT,
     metadata: { lead_id: leadId, call_type: 'closing' },
   })
 
@@ -179,7 +182,10 @@ export async function pollClosingCall(leadId: string): Promise<'going_ahead' | '
     return 'no_answer'
   }
 
-  const details = extractClosingDetails(call.transcripts || [], call.summary || '', call.analysis)
+  const details = extractClosingDetails(call.transcripts || [], call.summary || '', {
+    ...(call.analysis || {}),
+    disposition_tag: call.disposition_tag,
+  })
   const totalPrice = pricing.setup + (details.needsDomain ? pricing.domain : 0)
 
   const updateData: Record<string, unknown> = {
@@ -220,7 +226,7 @@ export async function pollClosingCall(leadId: string): Promise<'going_ahead' | '
   await agentLog('closer', `Closing call complete for ${lead.name}: ${details.wantsToGoAhead ? 'GOING AHEAD' : 'not yet decided'}`, {
     leadId,
     level: 'success',
-    metadata: { summary: call.summary, analysis: call.analysis, details }
+    metadata: { summary: call.summary, disposition: call.disposition_tag, details }
   })
 
   if (!details.wantsToGoAhead) {
@@ -292,23 +298,32 @@ export function extractClosingDetails(
   const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() && v.trim().toLowerCase() !== 'null' ? v.trim() : null)
   const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : null)
 
-  // Going ahead: structured answer wins; otherwise explicit commitment with no hesitation
+  // Going ahead, in trust order: Bland's disposition tag → the labelled
+  // DECISION line in the steered summary → explicit commitment with no hesitation
+  const tag = str(a.disposition_tag)?.toLowerCase()
+  const decisionLine = summaryText.match(/decision:\s*(going ahead|undecided|declined)/)?.[1]
   const structuredGoAhead = bool(a.wants_to_go_ahead)
-  const wantsToGoAhead = structuredGoAhead !== null
-    ? structuredGoAhead
-    : (CUSTOMER_COMMITS.test(customerText) || SUMMARY_COMMITS.test(summaryText)) && !HESITATIONS.test(allText)
+  let wantsToGoAhead: boolean
+  if (tag === 'going_ahead') wantsToGoAhead = true
+  else if (tag === 'undecided' || tag === 'declined' || tag === 'no_answer') wantsToGoAhead = false
+  else if (decisionLine) wantsToGoAhead = decisionLine === 'going ahead'
+  else if (structuredGoAhead !== null) wantsToGoAhead = structuredGoAhead
+  else wantsToGoAhead = (CUSTOMER_COMMITS.test(customerText) || SUMMARY_COMMITS.test(summaryText)) && !HESITATIONS.test(allText)
 
-  // Domain detection
-  const structuredDomain = str(a.domain_name)
+  // Domain detection (labelled summary line first, then transcript)
+  const domainLine = summary.match(/DOMAIN:\s*([a-z0-9-]+(?:\.[a-z0-9-]+)+)/i)?.[1]
+  const structuredDomain = str(a.domain_name) || domainLine || null
   const domainMatch = customerText.match(/([a-z0-9-]+\.(co\.uk|com|org|net|uk))/i)
   const domain = structuredDomain && /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(structuredDomain)
     ? structuredDomain.toLowerCase()
     : domainMatch ? domainMatch[0] : null
   const needsDomain = bool(a.needs_domain_registration)
-    ?? (/don'?t have|no domain|need a domain|register|sort that out/.test(allText) && !domain)
+    ?? (/domain:\s*needs registration/.test(summaryText) || (/don'?t have|no domain|need a domain|register|sort that out/.test(allText) && !domain))
 
   // Email setup
-  const needsEmail = bool(a.needs_email_setup) ?? (needsDomain && /email|hello@|professional email/.test(allText))
+  const emailLine = summaryText.match(/email setup:\s*(yes|no)/)?.[1]
+  const needsEmail = bool(a.needs_email_setup)
+    ?? (emailLine ? emailLine === 'yes' : (needsDomain && /email|hello@|professional email/.test(allText)))
 
   // CTA type
   let ctaType: 'phone' | 'email_form' | null = null
@@ -329,9 +344,11 @@ export function extractClosingDetails(
     if (ctaType === 'email_form' && emailMatch) ctaValue = emailMatch[0]
   }
 
-  // Changes
-  let changes: string | null = str(a.requested_changes)
-  if (!changes) {
+  // Changes: structured field, then the labelled summary line (an explicit
+  // "CHANGES: none" is final), then the regex fallback over the transcript.
+  const changesLine = summary.match(/CHANGES:\s*(.+)/i)?.[1]?.trim()
+  let changes: string | null = str(a.requested_changes) || (changesLine && !/^none\.?$/i.test(changesLine) ? changesLine : null)
+  if (!changes && !changesLine) {
     const changeIndicators = /change|update|different|replace|swap|modify|add|remove/
     if (changeIndicators.test(allText)) {
       // Extract the sentences around change requests from summary

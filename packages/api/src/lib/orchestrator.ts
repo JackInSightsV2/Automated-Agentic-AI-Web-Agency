@@ -1,7 +1,44 @@
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, } from 'node:fs'
+import { mkdirSync, readFileSync, cpSync, existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { agentLog } from './logger'
+import { INTERNAL_DIRS } from './fs'
+
+/**
+ * Vendored Claude Code skills and subagents (packages/api/claude/). Jobs run
+ * in /tmp, outside the repo, so the orchestrator copies the subset each
+ * profile needs into <jobDir>/.claude/ before spawning. See claude/README.md.
+ */
+export const CLAUDE_ASSETS_DIR = join(import.meta.dir, '..', '..', 'claude')
+
+export const PROFILE_ASSETS: Partial<Record<JobProfile, { skills?: string[]; agents?: string[] }>> = {
+  builder:    { skills: ['frontend-design'] },
+  copywriter: { agents: ['content-marketer'] },
+  seo:        { agents: ['seo-meta-optimizer', 'seo-structure-architect'] },
+  reviewer:   { agents: ['code-reviewer', 'performance-engineer'] },
+}
+
+/** Copy the profile's skills/agents into <jobDir>/.claude/. Returns what was staged. */
+export function stageClaudeAssets(profile: JobProfile, jobDir: string, assetsDir = CLAUDE_ASSETS_DIR): { skills: string[]; agents: string[] } {
+  const wanted = PROFILE_ASSETS[profile]
+  const staged = { skills: [] as string[], agents: [] as string[] }
+  if (!wanted) return staged
+
+  for (const skill of wanted.skills || []) {
+    const src = join(assetsDir, 'skills', skill)
+    if (!existsSync(join(src, 'SKILL.md'))) continue
+    cpSync(src, join(jobDir, '.claude', 'skills', skill), { recursive: true })
+    staged.skills.push(skill)
+  }
+  for (const agent of wanted.agents || []) {
+    const src = join(assetsDir, 'agents', `${agent}.md`)
+    if (!existsSync(src)) continue
+    mkdirSync(join(jobDir, '.claude', 'agents'), { recursive: true })
+    cpSync(src, join(jobDir, '.claude', 'agents', `${agent}.md`))
+    staged.agents.push(agent)
+  }
+  return staged
+}
 
 export type JobProfile = 'scout' | 'builder' | 'deployer' | 'emailer' | 'caller' | 'analyst' | 'delivery' | 'copywriter' | 'seo' | 'reviewer'
 
@@ -29,9 +66,9 @@ const PROFILES: Record<JobProfile, { maxTurns: number; model?: string }> = {
   caller:   { maxTurns: 3,  model: 'sonnet' },
   analyst:    { maxTurns: 10, model: 'sonnet' },
   delivery:   { maxTurns: 10, model: 'sonnet' },
-  copywriter: { maxTurns: 5,  model: 'sonnet' },
-  seo:        { maxTurns: 12 }, // no longer generates the hero image itself
-  reviewer:   { maxTurns: 5,  model: 'sonnet' },
+  copywriter: { maxTurns: 10, model: 'sonnet' }, // + content-marketer subagent
+  seo:        { maxTurns: 14 },                  // + two seo-* subagents; hero image is generated outside the job
+  reviewer:   { maxTurns: 8,  model: 'sonnet' }, // + code-reviewer and performance-engineer subagents
 }
 
 /** Recursively collect all text files from a directory */
@@ -41,7 +78,7 @@ function collectFiles(dir: string, baseDir: string, files: Record<string, string
     const entries = readdirSync(dir, { withFileTypes: true })
     for (const entry of entries) {
       const fullPath = join(dir, entry.name)
-      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      if ((INTERNAL_DIRS as readonly string[]).includes(entry.name)) continue
       if (entry.isDirectory()) {
         collectFiles(fullPath, baseDir, files)
       } else {
@@ -62,10 +99,12 @@ export async function runJob(job: Job): Promise<JobResult> {
   const jobDir = `/tmp/webagency-jobs/${job.id}`
   mkdirSync(jobDir, { recursive: true })
 
+  const staged = stageClaudeAssets(job.profile, jobDir)
+
   await agentLog('orchestrator', `Spawning Claude Code: ${job.profile} job ${job.id}`, {
     leadId: job.leadId,
     runId: job.runId,
-    metadata: { profile: job.profile, maxTurns: PROFILES[job.profile].maxTurns }
+    metadata: { profile: job.profile, maxTurns: PROFILES[job.profile].maxTurns, skills: staged.skills, agents: staged.agents }
   })
 
   const profile = PROFILES[job.profile]

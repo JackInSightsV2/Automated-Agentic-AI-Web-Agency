@@ -1,22 +1,39 @@
 /**
  * Thin Bland.ai client shared by the caller, follow-up, and closer agents.
  *
- * `analysis_schema` asks Bland to return structured fields after the call
- * (available as `analysis` on GET /v1/calls/:id). Agents prefer those fields
- * and fall back to transcript/summary regexes when Bland does not return them.
+ * Post-call structure comes from Bland's documented mechanisms:
+ * - `dispositions`: a list of outcome tags we pass on send; after the call
+ *   Bland picks one from the transcript and returns it as `disposition_tag`.
+ * - `summary_prompt`: instructions for the generated `summary`.
+ * - `answered_by`: "human" | "voicemail" | "no-answer" | "unknown".
+ * Agents use these first and fall back to transcript/summary regexes.
  */
 import { fetchWithRetry } from './fetch-retry'
 
 export interface BlandCall {
   call_id?: string
-  status?: string
+  status?: string          // completed | failed | busy | no-answer | canceled | unknown | in-progress | queued
   completed?: boolean
   queue_status?: string
-  answered_by?: string
+  answered_by?: string | null
+  disposition_tag?: string | null
   summary?: string
   transcripts?: Array<{ user: string; text: string }>
   analysis?: Record<string, unknown> | null
+  variables?: Record<string, unknown> | null
   error_message?: string | null
+}
+
+/** Signals that describe how a finished call went, in order of trust. */
+export interface CallSignals {
+  disposition_tag?: string | null
+  answered_by?: string | null
+  status?: string | null
+  analysis?: Record<string, unknown> | null
+}
+
+export function callSignals(call: BlandCall): CallSignals {
+  return { disposition_tag: call.disposition_tag, answered_by: call.answered_by, status: call.status, analysis: call.analysis }
 }
 
 function apiKey(): string {
@@ -54,7 +71,9 @@ export function isCallFinished(call: BlandCall): boolean {
   return call.completed === true || call.status === 'completed'
 }
 
-/** Calls that never connected (Bland-side failure) so we do not wait on them forever. */
+const FAILED_STATUSES = new Set(['failed', 'error', 'busy', 'no-answer', 'canceled', 'cancelled'])
+
+/** Calls that ended without a conversation (Bland-side) so we do not wait on them forever. */
 export function isCallFailed(call: BlandCall): boolean {
-  return call.status === 'failed' || call.status === 'error' || !!call.error_message
+  return (!!call.status && FAILED_STATUSES.has(call.status)) || !!call.error_message
 }

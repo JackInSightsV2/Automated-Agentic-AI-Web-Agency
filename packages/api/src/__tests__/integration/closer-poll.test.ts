@@ -56,7 +56,9 @@ describe('pollClosingCall', () => {
       status: 'completed',
       completed: true,
       summary: 'Customer agreed to proceed. Wants a phone CTA.',
-      analysis: { wants_to_go_ahead: true, needs_domain_registration: true, needs_email_setup: true, cta_type: 'phone', cta_value: '07700 900000' },
+      disposition_tag: 'going_ahead',
+      answered_by: 'human',
+      analysis: { needs_domain_registration: true, needs_email_setup: true, cta_type: 'phone', cta_value: '07700 900000' },
       transcripts: [{ user: 'customer', text: "Yes let's do it" }],
     })
     restore = fetchMock.restore
