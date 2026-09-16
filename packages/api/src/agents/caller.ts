@@ -1,18 +1,20 @@
 import { supabase } from '../lib/supabase'
 import { agentLog } from '../lib/logger'
-import { startCall, getCall, isCallFinished, isCallFailed } from '../lib/bland'
+import { startCall, getCall, isCallFinished, isCallFailed, callSignals } from '../lib/bland'
+import type { CallSignals } from '../lib/bland'
 import { agency, getCallPhone } from '../lib/config'
 
 export type CallOutcome = 'interested' | 'not_interested' | 'voicemail' | 'no_answer'
 
 const OUTCOMES: CallOutcome[] = ['interested', 'not_interested', 'voicemail', 'no_answer']
 
-/** Structured fields we ask Bland to extract after the call (see lib/bland.ts). */
-const CALL_ANALYSIS_SCHEMA = {
-  outcome: 'One of: interested, not_interested, voicemail, no_answer. "interested" only if the person wanted the link or a follow-up.',
-  contact_name: 'First name of the person spoken to, or null',
-  email: 'Email address they gave, or null',
-}
+/** Outcome tags Bland picks from after the call (returned as `disposition_tag`). */
+const CALL_DISPOSITIONS = [...OUTCOMES]
+
+const CALL_SUMMARY_PROMPT =
+  'Summarise the call in under 120 words. State clearly: whether the person was interested, not interested, or undecided; ' +
+  'whether it went to voicemail or was unanswered; the first name of the person spoken to if given; ' +
+  'and any email address or alternative phone number they gave, written out exactly.'
 
 /** A call that has not completed after this long is treated as unanswered. */
 export const CALL_TIMEOUT_MS = 30 * 60 * 1000
@@ -94,7 +96,8 @@ CRITICAL RULES:
     wait_for_greeting: false,
     interruption_threshold: 200,
     voicemail_action: 'leave_message',
-    analysis_schema: CALL_ANALYSIS_SCHEMA,
+    dispositions: CALL_DISPOSITIONS,
+    summary_prompt: CALL_SUMMARY_PROMPT,
     metadata: { lead_id: leadId },
   })
 
@@ -139,11 +142,11 @@ export async function pollBlandCall(leadId: string): Promise<CallOutcome | null>
   if (!isCallFinished(call) && !isCallFailed(call) && !timedOut) return null
 
   const outcome: CallOutcome = isCallFinished(call)
-    ? inferOutcome(call.summary || '', call.analysis)
+    ? inferOutcome(call.summary || '', callSignals(call))
     : 'no_answer'
 
   // Try to extract any email or alternate number they gave during the call
-  const contactInfo = extractContactInfo(call.transcripts || [], call.analysis)
+  const contactInfo = extractContactInfo(call.transcripts || [], call.analysis, call.summary)
 
   const updateData: Record<string, unknown> = {
     call_completed_at: new Date().toISOString(),
@@ -168,7 +171,7 @@ export async function pollBlandCall(leadId: string): Promise<CallOutcome | null>
   await agentLog('caller', `Call outcome for ${lead.name}: ${outcome}${contactInfo.email ? ` (captured email: ${contactInfo.email})` : ''}${timedOut && !isCallFinished(call) ? ' (timed out waiting for Bland)' : ''}`, {
     leadId,
     level: outcome === 'interested' ? 'success' : 'info',
-    metadata: { summary: call.summary, analysis: call.analysis, contactInfo, blandStatus: call.status }
+    metadata: { summary: call.summary, disposition: call.disposition_tag, answeredBy: call.answered_by, contactInfo, blandStatus: call.status }
   })
 
   const { notify } = await import('../lib/telegram')
@@ -201,13 +204,19 @@ const NO_ANSWER = /\b(no answer|didn'?t answer|did not answer|not answered|unans
 const INTERESTED = /\b(interested|keen|love[sd]? it|loved|sounds (good|great)|happy (to|for)|book(ed|ing)?|send (me |it |that |the )|text (me|it|that)|whatsapp|go ahead|follow[- ]?up|call back|callback|yes)\b/
 
 /**
- * Classify the intro call. Prefers Bland's structured `analysis.outcome`;
- * otherwise scans the summary, checking negative outcomes before positive ones
- * so "not interested" can never read as "interested".
+ * Classify the intro call. Trust order:
+ * 1. Bland's `disposition_tag` (one of our CALL_DISPOSITIONS, chosen from the transcript)
+ * 2. `answered_by` / `status` for voicemail and unanswered calls
+ * 3. the summary, checking negative outcomes before positive ones so
+ *    "not interested" can never read as "interested"
  */
-export function inferOutcome(summary: string, analysis?: Record<string, unknown> | null): CallOutcome {
-  const structured = typeof analysis?.outcome === 'string' ? analysis.outcome.toLowerCase().trim() : null
-  if (structured && (OUTCOMES as string[]).includes(structured)) return structured as CallOutcome
+export function inferOutcome(summary: string, signals?: CallSignals | null): CallOutcome {
+  const tag = typeof signals?.disposition_tag === 'string' ? signals.disposition_tag.toLowerCase().trim() : null
+  if (tag && (OUTCOMES as string[]).includes(tag)) return tag as CallOutcome
+
+  const answeredBy = signals?.answered_by?.toLowerCase()
+  if (answeredBy === 'voicemail') return 'voicemail'
+  if (answeredBy === 'no-answer' || signals?.status === 'no-answer' || signals?.status === 'busy') return 'no_answer'
 
   const s = summary.toLowerCase()
   if (!s.trim()) return 'no_answer'
@@ -218,10 +227,14 @@ export function inferOutcome(summary: string, analysis?: Record<string, unknown>
   return 'no_answer'
 }
 
-/** Extract contact name and email from Bland's analysis, falling back to the transcript */
+/**
+ * Extract contact name and email: structured `analysis` fields if Bland returns
+ * any, then the customer's transcript lines, then the (summary_prompt-steered) summary.
+ */
 export function extractContactInfo(
   transcripts: Array<{ user: string; text: string }>,
   analysis?: Record<string, unknown> | null,
+  summary?: string | null,
 ): { email?: string; altPhone?: string; contactName?: string } {
   const result: { email?: string; altPhone?: string; contactName?: string } = {}
 
@@ -237,9 +250,9 @@ export function extractContactInfo(
     .map(t => t.text)
     .join(' ')
 
-  // Look for email pattern
+  // Look for email pattern in what the customer said, then in the summary
   if (!result.email) {
-    const emailMatch = fullText.match(/[\w.-]+@[\w.-]+\.\w{2,}/)
+    const emailMatch = fullText.match(/[\w.-]+@[\w.-]+\.\w{2,}/) || (summary || '').match(/[\w.-]+@[\w.-]+\.\w{2,}/)
     if (emailMatch) result.email = emailMatch[0].toLowerCase()
   }
 

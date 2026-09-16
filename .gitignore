@@ -59,3 +59,6 @@ htmlcov/
 
 # Local agent instructions
 CLAUDE.md
+
+# Claude Code local project settings (setup.sh creates this)
+.claude/settings.local.json

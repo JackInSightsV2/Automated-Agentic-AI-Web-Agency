@@ -4,10 +4,8 @@ import { runJob } from '../lib/orchestrator'
 import { leadSlug } from '../lib/slug'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync, } from 'node:fs'
-import { join, sep } from 'node:path'
-
-/** Filter that skips node_modules and .git when copying */
-const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')
+import { join } from 'node:path'
+import { skipInternal as skipNodeModules } from '../lib/fs'
 
 const PREVIEW_DIR = join(process.cwd(), 'preview')
 
@@ -51,7 +49,7 @@ ${lead.error}
 
   const prompt = `You are an expert web designer. Build a complete Vite + vanilla JavaScript website for a local business.
 
-IMPORTANT: Focus ONLY on writing the website files. Do NOT use any skills or slash commands. Just write the code directly.
+FIRST: use the Skill tool to load the "frontend-design" skill and follow its guidance on aesthetic direction, typography, and layout. Do not use any other skills, slash commands, or subagents. Then write the code directly.
 
 Business Details:
 - Name: ${lead.name}

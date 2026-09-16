@@ -50,7 +50,7 @@ describe('pollBlandCall', () => {
         status: 'completed',
         completed: true,
         summary: 'Spoke to Sarah, she is interested and asked us to text the link.',
-        analysis: { outcome: 'interested', contact_name: 'Sarah', email: null },
+        disposition_tag: 'interested', answered_by: 'human', analysis: { contact_name: 'Sarah', email: null },
         transcripts: [],
       },
     }])

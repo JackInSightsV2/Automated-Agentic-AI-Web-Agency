@@ -53,13 +53,19 @@ describe('inferOutcome', () => {
     expect(inferOutcome('They said yes at first but then said no thanks, not right now')).toBe('not_interested')
   })
 
-  test('Bland analysis.outcome wins over the summary', () => {
-    expect(inferOutcome('They love it', { outcome: 'not_interested' })).toBe('not_interested')
-    expect(inferOutcome('', { outcome: 'INTERESTED ' })).toBe('interested')
+  test('Bland disposition_tag wins over the summary', () => {
+    expect(inferOutcome('They love it', { disposition_tag: 'not_interested' })).toBe('not_interested')
+    expect(inferOutcome('', { disposition_tag: 'INTERESTED ' })).toBe('interested')
   })
 
-  test('invalid analysis.outcome falls back to the summary', () => {
-    expect(inferOutcome('Left message on answering machine', { outcome: 'banana' })).toBe('voicemail')
+  test('answered_by / status decide voicemail and no-answer before the summary', () => {
+    expect(inferOutcome('Great chat, very interested', { answered_by: 'voicemail' })).toBe('voicemail')
+    expect(inferOutcome('', { answered_by: 'no-answer' })).toBe('no_answer')
+    expect(inferOutcome('', { status: 'busy' })).toBe('no_answer')
+  })
+
+  test('unknown disposition_tag falls back to the summary', () => {
+    expect(inferOutcome('Left message on answering machine', { disposition_tag: 'banana' })).toBe('voicemail')
   })
 })
 

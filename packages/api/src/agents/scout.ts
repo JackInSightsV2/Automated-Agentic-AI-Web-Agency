@@ -125,7 +125,7 @@ export async function runScoutAgent(query: string, pipelineRunId: string, limit 
     },
     body: JSON.stringify({
       textQuery: query,
-      maxResultCount: Math.min(limit * 4, 20)
+      pageSize: Math.min(limit * 4, 20)
     })
   })
 

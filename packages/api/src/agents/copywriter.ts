@@ -31,8 +31,11 @@ Business Details:
 - Rating: ${lead.google_rating ? `${lead.google_rating}/5 (${lead.google_review_count} reviews)` : 'New business'}
 - Existing website: ${lead.website_detected || 'None'}
 
-Use the /content-marketing skill to research the best content strategy for a ${lead.category} business.
-Use the /theme-factory skill to select an appropriate visual theme.
+STEP 1: Delegate to the "content-marketer" subagent (Task tool) with this exact ask: "For a local ${lead.category} business called ${lead.name} in ${lead.address || 'the UK'}, give me: 3 messaging angles that differentiate it from competitors, the top 5 local SEO keywords a customer would search, and 3 unique selling points. Be concrete and specific to this trade. Under 200 words." Use its answer for seo_keywords, unique_selling_points, and the hero copy.
+
+STEP 2: Choose the visual identity yourself: a palette (5 hex colours) and a Google Fonts pairing that suit a ${lead.category}, avoiding generic defaults (no plain blue-and-grey, no Inter/Roboto unless there is a reason). The builder will follow the brief exactly.
+
+Do not use any skills or slash commands.
 
 Create a JSON creative brief with this exact structure — output ONLY the JSON, no markdown fences:
 {

@@ -4,10 +4,8 @@ import { runJob } from '../lib/orchestrator'
 import { leadSlug } from '../lib/slug'
 import { randomUUID } from 'node:crypto'
 import { cpSync, existsSync } from 'node:fs'
-import { join, sep } from 'node:path'
-
-/** Filter that skips node_modules and .git when copying */
-const skipNodeModules = (src: string) => !src.split(sep).includes('node_modules') && !src.split(sep).includes('.git')
+import { join } from 'node:path'
+import { skipInternal as skipNodeModules } from '../lib/fs'
 
 const PREVIEW_DIR = join(process.cwd(), 'preview')
 
@@ -44,6 +42,11 @@ export async function runCodeReviewerAgent(leadId: string): Promise<boolean> {
 Business: ${lead.name} (${lead.category})
 
 The website files are in the current directory.
+
+Two subagents are available (Task tool). Run BOTH first, in parallel, then combine their findings with your own read of the files:
+- "code-reviewer": ask for HTML validity, CSS quality, JavaScript safety, security, accessibility, and content-accuracy issues, each tagged critical or warning.
+- "performance-engineer": ask for render-blocking resources, unoptimised images, missing lazy loading, and file-size problems for a static Vite site, each tagged critical or warning.
+Do not use any skills or slash commands.
 
 Review the site across these dimensions and score each 0-100:
 

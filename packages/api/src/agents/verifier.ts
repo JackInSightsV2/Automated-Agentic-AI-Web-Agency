@@ -22,16 +22,6 @@ interface FilingHistoryResponse {
   }>
 }
 
-interface HMRCVatResponse {
-  target?: {
-    name: string
-    vatNumber: string
-    address?: {
-      line1?: string
-      postcode?: string
-    }
-  }
-}
 
 export async function runVerifierAgent(leadId: string): Promise<boolean> {
   const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).single()
@@ -99,9 +89,9 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
     notes.push('+15 no Companies House API key configured')
   }
 
-  // 2. HMRC Filing History Check (via Companies House filing-history endpoint)
+  // 2. Companies House filing history
   //    Checks if the company is actively filing confirmation statements and accounts,
-  //    which indicates HMRC compliance and active business operations.
+  //    which indicates the company is live and trading (not dormant).
   if (chNumber && apiKey) {
     try {
       const filingRes = await fetchWithRetry(
@@ -123,53 +113,19 @@ export async function runVerifierAgent(leadId: string): Promise<boolean> {
 
           if (monthsAgo <= 15) {
             score += 15
-            notes.push(`+15 HMRC compliance: last filing ${filings[0].date} (${filings[0].description})`)
+            notes.push(`+15 Companies House filings: last filing ${filings[0].date} (${filings[0].description})`)
           } else {
             score -= 10
-            notes.push(`-10 HMRC compliance: last filing ${filings[0].date} (${Math.round(monthsAgo)} months ago — possibly dormant)`)
+            notes.push(`-10 Companies House filings: last filing ${filings[0].date} (${Math.round(monthsAgo)} months ago — possibly dormant)`)
           }
         } else {
-          notes.push('HMRC compliance: no filing history found')
+          notes.push('Companies House filings: no filing history found')
         }
       } else {
         notes.push(`Filing history API error: ${filingRes.status}`)
       }
     } catch (err) {
-      notes.push(`HMRC filing history check failed: ${String(err)}`)
-    }
-  }
-
-  // 3. HMRC VAT Registration Check
-  //    Validates whether the business is VAT registered (turnover > £85k threshold).
-  //    Uses HMRC's public VAT check API — requires a VAT Registration Number (VRN).
-  const hmrcVatCheck = process.env.HMRC_VAT_CHECK !== 'false'
-  if (hmrcVatCheck && chNumber) {
-    try {
-      // UK VAT numbers for limited companies can sometimes be found by trying
-      // the company number as a VRN (not always reliable, but worth checking)
-      const potentialVrn = chNumber.replace(/^0+/, '').padStart(9, '0')
-
-      const vatRes = await fetchWithRetry(
-        `https://api.service.hmrc.gov.uk/organisations/vat/check-vat-number/lookup/${potentialVrn}`,
-        {
-          headers: { Accept: 'application/json' },
-        }
-      )
-
-      if (vatRes.ok) {
-        const vatData = (await vatRes.json()) as HMRCVatResponse
-        if (vatData.target) {
-          score += 15
-          notes.push(`+15 HMRC VAT registered: ${vatData.target.name} (VRN: ${vatData.target.vatNumber})`)
-        }
-      } else if (vatRes.status === 404) {
-        // Not VAT registered — neutral for small businesses
-        notes.push('HMRC VAT: not registered (normal for businesses under £85k turnover)')
-      } else {
-        notes.push(`HMRC VAT API error: ${vatRes.status}`)
-      }
-    } catch (err) {
-      notes.push(`HMRC VAT check failed: ${String(err)}`)
+      notes.push(`Filing history check failed: ${String(err)}`)
     }
   }
 

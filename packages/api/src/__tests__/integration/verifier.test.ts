@@ -111,7 +111,7 @@ describe('runVerifierAgent', () => {
     expect(viable).toBe(true)
   })
 
-  test('recent HMRC filing → +15', async () => {
+  test('recent Companies House filing → +15', async () => {
     const lead = makeLead({ name: 'Filing Corp' })
     store._seed('leads', [lead])
 
@@ -139,7 +139,7 @@ describe('runVerifierAgent', () => {
     await runVerifierAgent(lead.id)
 
     const updated = store._get('leads').find(l => l.id === lead.id)
-    expect((updated?.viability_notes as string)).toContain('HMRC compliance')
+    expect((updated?.viability_notes as string)).toContain('Companies House filings')
   })
 
   test('high Google rating + reviews → appropriate additions', async () => {

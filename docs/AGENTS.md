@@ -11,28 +11,32 @@ The system uses 15 specialized AI agents, each handling one step of the pipeline
 
 ## Verifier Agent
 - **File:** `packages/api/src/agents/verifier.ts`
-- **Purpose:** Validates discovered leads -- checks for existing websites, valid phone numbers
+- **Purpose:** Scores lead viability: Companies House status and recent filings, Google rating and review count, phone present. Threshold is `VIABILITY_THRESHOLD` (default 40).
 - **Input:** Lead in `discovered` status
-- **Output:** Lead updated to `verified` or `rejected`
+- **Output:** Lead updated to `verified` or `rejected`, with `viability_score` and `viability_notes`
+- **Config:** `COMPANIES_HOUSE_API_KEY` (optional), `VIABILITY_THRESHOLD`
 
 ## Copywriter Agent
 - **File:** `packages/api/src/agents/copywriter.ts`
-- **Purpose:** Creates a creative brief (brand voice, colors, typography, content) for the website
+- **Purpose:** Creates a creative brief (brand voice, colors, typography, content) for the website. Delegates messaging angles, local keywords, and USPs to the `content-marketer` subagent, then chooses the palette and type pairing itself.
 - **Input:** Lead in `verified` status
 - **Output:** JSON creative brief stored on the lead
 - **Config:** `AGENCY_NAME`
+- **Staged assets:** `content-marketer` agent
 
 ## Builder Agent
 - **File:** `packages/api/src/agents/builder.ts`
-- **Purpose:** Generates a complete Vite website using Claude Code as a subprocess
+- **Purpose:** Generates a complete Vite website using Claude Code as a subprocess, loading the `frontend-design` skill first for aesthetic direction
 - **Input:** Lead with creative brief
 - **Output:** Website source files in `preview/` directory
+- **Staged assets:** `frontend-design` skill
 
 ## Code Reviewer Agent
 - **File:** `packages/api/src/agents/code-reviewer.ts`
-- **Purpose:** Reviews generated website code for quality, accessibility, and correctness
+- **Purpose:** Reviews generated website code for quality, accessibility, and correctness. Runs the `code-reviewer` and `performance-engineer` subagents in parallel and combines their findings into `review.json`.
 - **Input:** Built website files
 - **Output:** Pass/fail with feedback (failed sites get re-queued for rebuild, max 3 attempts)
+- **Staged assets:** `code-reviewer`, `performance-engineer` agents
 
 ## SEO Agent
 - **File:** `packages/api/src/agents/seo.ts` (hero image: `packages/api/src/lib/images.ts`)
@@ -40,6 +44,7 @@ The system uses 15 specialized AI agents, each handling one step of the pipeline
 - **Input:** Built website
 - **Output:** SEO-optimized website with `public/hero.webp` (or the gradient hero if no `OPENAI_API_KEY`)
 - **Config:** `OPENAI_API_KEY`, `OPENAI_IMAGE_MODEL`, `OPENAI_IMAGE_QUALITY`, `OPENAI_IMAGE_SIZE`, `HERO_IMAGES`
+- **Staged assets:** `seo-meta-optimizer`, `seo-structure-architect` agents
 
 ## Deployer Agent
 - **File:** `packages/api/src/agents/deployer.ts`
